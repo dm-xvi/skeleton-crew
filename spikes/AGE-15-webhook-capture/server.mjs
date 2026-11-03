@@ -15,6 +15,8 @@ const TOKEN_FILE = join(OAUTH_DIR, 'token.json');
 // Post a "thought" when a session is created or prompted, so Linear keeps the
 // session active and offers the stop control. Set EMIT_THOUGHT=0 to stay silent.
 const EMIT_THOUGHT = process.env.EMIT_THOUGHT !== '0';
+// AGE-16 points this at a client_credentials token to see whether it can post.
+const THOUGHT_TOKEN_FILE = process.env.THOUGHT_TOKEN_FILE ?? TOKEN_FILE;
 
 mkdirSync(WEBHOOK_DIR, { recursive: true });
 mkdirSync(OAUTH_DIR, { recursive: true });
@@ -79,11 +81,11 @@ async function exchangeCode(code, redirectUri) {
 }
 
 async function emitThought(sessionId, body) {
-  if (!existsSync(TOKEN_FILE)) {
+  if (!existsSync(THOUGHT_TOKEN_FILE)) {
     console.log(`no token yet; not posting a thought to session ${sessionId}`);
     return;
   }
-  const { access_token } = JSON.parse(readFileSync(TOKEN_FILE, 'utf8'));
+  const { access_token } = JSON.parse(readFileSync(THOUGHT_TOKEN_FILE, 'utf8'));
   const post = () =>
     fetch('https://api.linear.app/graphql', {
       method: 'POST',

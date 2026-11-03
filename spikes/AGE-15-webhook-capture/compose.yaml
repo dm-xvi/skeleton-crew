@@ -12,6 +12,8 @@ services:
       PORT: "3000"
       DATA_DIR: /data
       EMIT_THOUGHT: ${EMIT_THOUGHT:-1}
+      # Token the thoughts are posted with; defaults to the authorization_code token.
+      THOUGHT_TOKEN_FILE: ${THOUGHT_TOKEN_FILE:-/data/oauth/token.json}
       # The container has no IPv6 route; Node's default 250 ms per-address attempt
       # can time out every address of api.linear.app on a cold connection.
       NODE_OPTIONS: --dns-result-order=ipv4first --network-family-autoselection-attempt-timeout=2000
