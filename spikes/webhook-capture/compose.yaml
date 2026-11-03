@@ -1,0 +1,26 @@
+# Throwaway stack for AGE-15: the coder's tunnel in front of a capture service.
+# The tunnel's public hostname routes to http://bridge:3000, so the service is named bridge.
+name: webhook-capture
+
+services:
+  bridge:
+    image: node:24-alpine
+    working_dir: /app
+    command: ["node", "server.mjs"]
+    env_file: ../../credentials/coder/linear.env
+    environment:
+      PORT: "3000"
+      DATA_DIR: /data
+      EMIT_THOUGHT: ${EMIT_THOUGHT:-1}
+      # The container has no IPv6 route; Node's default 250 ms per-address attempt
+      # can time out every address of api.linear.app on a cold connection.
+      NODE_OPTIONS: --dns-result-order=ipv4first --network-family-autoselection-attempt-timeout=2000
+    volumes:
+      - ./server.mjs:/app/server.mjs:ro
+      - ../../data:/data
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    command: ["tunnel", "--no-autoupdate", "run"]
+    env_file: ../../credentials/coder/tunnel.env
+    depends_on: [bridge]

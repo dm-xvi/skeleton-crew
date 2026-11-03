@@ -1,0 +1,14 @@
+{
+  "capturedAt": "2026-11-03T20:14:57.289Z",
+  "method": "POST",
+  "path": "/webhooks/linear",
+  "headers": {
+    "content-type": "application/json; charset=utf-8",
+    "user-agent": "Linear-Webhook",
+    "linear-delivery": "b9ecbc69-44fc-47af-aa09-b783107d4c7c",
+    "linear-event": "AppUserNotification",
+    "linear-signature": "6f0a404abf0dff9cff1098df2474fd36f1ae921b049fcdbb61f343f2e68cb9b8",
+    "linear-timestamp": "1793736896972"
+  },
+  "body": "{\"type\":\"AppUserNotification\",\"action\":\"issueAssignedToYou\",\"createdAt\":\"2026-11-03T20:14:56.948Z\",\"organizationId\":\"724adc74-61a9-4c01-8584-2a37b85f3118\",\"oauthClientId\":\"00000000000000000000000000000000\",\"appUserId\":\"e067e6e9-6080-4b37-8a80-779f63de574d\",\"notification\":{\"id\":\"50cb5367-2513-4a7d-a025-688887c33449\",\"createdAt\":\"2026-11-03T20:14:56.856Z\",\"updatedAt\":\"2026-11-03T20:14:56.856Z\",\"archivedAt\":null,\"type\":\"issueAssignedToYou\",\"actorId\":\"c8134afb-61ba-490b-8275-86918f0da86c\",\"externalUserActorId\":null,\"userId\":\"e067e6e9-6080-4b37-8a80-779f63de574d\",\"issueId\":\"4aca0e5d-0f02-404f-ab57-dc5998832d18\",\"issue\":{\"id\":\"4aca0e5d-0f02-404f-ab57-dc5998832d18\",\"title\":\"Test issue 1, plz ignore\",\"teamId\":\"b44ffcb9-df64-424c-b2cf-81216cf6b640\",\"team\":{\"id\":\"b44ffcb9-df64-424c-b2cf-81216cf6b640\",\"key\":\"AGE\",\"name\":\"Agent Factory\"},\"identifier\":\"AGE-42\",\"url\":\"https://linear.app/example-workspace/issue/AGE-42/test-issue-1-plz-ignore\"},\"actor\":{\"id\":\"c8134afb-61ba-490b-8275-86918f0da86c\",\"name\":\"Test User 1\",\"email\":\"user1@example.com\",\"url\":\"https://linear.app/example-workspace/profiles/test-user-1\"}},\"webhookTimestamp\":1793736896972,\"webhookId\":\"d0347716-4a13-45f6-a967-69755965bada\"}"
+}

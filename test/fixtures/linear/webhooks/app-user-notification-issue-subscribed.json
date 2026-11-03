@@ -1,0 +1,14 @@
+{
+  "capturedAt": "2026-11-03T20:14:57.331Z",
+  "method": "POST",
+  "path": "/webhooks/linear",
+  "headers": {
+    "content-type": "application/json; charset=utf-8",
+    "user-agent": "Linear-Webhook",
+    "linear-delivery": "a6e5136a-5dc7-4c14-835b-155a07d67cd5",
+    "linear-event": "AppUserNotification",
+    "linear-signature": "7d8f89ed3c42a949eab664b31de27b1b2f58b432023505d3382c72b968e84d92",
+    "linear-timestamp": "1793736897013"
+  },
+  "body": "{\"type\":\"AppUserNotification\",\"action\":\"issueSubscribed\",\"createdAt\":\"2026-11-03T20:14:56.991Z\",\"organizationId\":\"724adc74-61a9-4c01-8584-2a37b85f3118\",\"oauthClientId\":\"00000000000000000000000000000000\",\"appUserId\":\"e067e6e9-6080-4b37-8a80-779f63de574d\",\"notification\":{\"id\":\"752bfb51-23f6-432d-bc38-422dde7f9bb9\",\"createdAt\":\"2026-11-03T20:14:56.906Z\",\"updatedAt\":\"2026-11-03T20:14:56.906Z\",\"archivedAt\":null,\"type\":\"issueSubscribed\",\"actorId\":\"c8134afb-61ba-490b-8275-86918f0da86c\",\"externalUserActorId\":null,\"userId\":\"e067e6e9-6080-4b37-8a80-779f63de574d\",\"issueId\":\"4aca0e5d-0f02-404f-ab57-dc5998832d18\",\"issue\":{\"id\":\"4aca0e5d-0f02-404f-ab57-dc5998832d18\",\"title\":\"Test issue 1, plz ignore\",\"teamId\":\"b44ffcb9-df64-424c-b2cf-81216cf6b640\",\"team\":{\"id\":\"b44ffcb9-df64-424c-b2cf-81216cf6b640\",\"key\":\"AGE\",\"name\":\"Agent Factory\"},\"identifier\":\"AGE-42\",\"url\":\"https://linear.app/example-workspace/issue/AGE-42/test-issue-1-plz-ignore\"},\"actor\":{\"id\":\"c8134afb-61ba-490b-8275-86918f0da86c\",\"name\":\"Test User 1\",\"email\":\"user1@example.com\",\"url\":\"https://linear.app/example-workspace/profiles/test-user-1\"}},\"webhookTimestamp\":1793736897013,\"webhookId\":\"d0347716-4a13-45f6-a967-69755965bada\"}"
+}
