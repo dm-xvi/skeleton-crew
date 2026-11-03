@@ -2,12 +2,13 @@
 // else gets the loaded profile and credentials from loadConfig().
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { PermissionMode } from "@anthropic-ai/claude-agent-sdk";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 
 // The image copies roles/ to /app/roles; dist/config.js sits in /app/dist.
-const DEFAULT_ROLES_DIR = new URL("../roles/", import.meta.url).pathname;
+const DEFAULT_ROLES_DIR = fileURLToPath(new URL("../roles/", import.meta.url));
 
 const permissionModes = [
   "default",

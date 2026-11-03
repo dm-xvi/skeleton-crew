@@ -3,10 +3,11 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, describe, test } from "node:test";
+import { fileURLToPath } from "node:url";
 import { ConfigError, loadConfig } from "../src/config.js";
 
 // The repo's shipped profiles, as the image copies them to /app/roles.
-const repoRolesDir = new URL("../../roles/", import.meta.url).pathname;
+const repoRolesDir = fileURLToPath(new URL("../../roles/", import.meta.url));
 
 const validEnv = {
   ROLE: "coder",
