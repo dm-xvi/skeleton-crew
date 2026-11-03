@@ -28,16 +28,23 @@ reached it, so this went untested.
 | Granted scope | `app:assignable app:mentionable read write` | `app:assignable app:mentionable read write` |
 | `viewer` | `coder`, `app: true` | `coder`, `app: true`, the same id |
 | `organization` | Resolves | Failed right after the mint ("Entity not found: Organization"), resolved about 30 s later |
-| `teams` | `AGE` | Empty, although both workspace teams are public |
+| `teams` | `AGE` only | None |
 | Mentionable | Yes | No: not in the @-mention menu |
 | Assignable (delegate) | Yes | No: not in the delegate picker |
 | Agent session webhook | Arrives (`created` on delegation and mention, `prompted`, stop; see AGE-15) | None arrived; nothing could be delegated or mentioned |
 
 **App user ID for the workspace:** `viewer.id` =
 `e067e6e9-6080-4b37-8a80-779f63de574d` (organization
-`724adc74-61a9-4c01-8584-2a37b85f3118`). It stayed the same through two
-uninstalls, a `client_credentials` install and a reinstall, so it belongs to the
+`724adc74-61a9-4c01-8584-2a37b85f3118`). It stayed the same through three
+revokes, two `client_credentials` installs and a reinstall, so it belongs to the
 app in this workspace, not to one install.
+
+**Team access:** both workspace teams (`AGE`, `SCR`) are public. Linear's
+docs say a `client_credentials` token reaches "all public teams", but neither
+grant got all of them. The auth-code install sees only `AGE`, and the
+`client_credentials` install sees none. Team access looks like it comes from
+the install itself, which `client_credentials` skips. The app's "manage" page
+has no setting to add a team afterwards.
 
 **Decision:** `authorization_code` with `actor=app`. `client_credentials` gives a
 bot that cannot be mentioned, delegated to or see a team.
@@ -56,7 +63,6 @@ bot that cannot be mentioned, delegated to or see a team.
 5. With the uninstall confirmed, minted a `client_credentials` token again. The
    authorize URL again said Coder was already installed. **Minting a
    `client_credentials` token installs the app**, but as a bot with no team.
-   The manage page has no team-access setting to fix that.
 6. Revoked from the manage page again (no `OAuthApp` webhook this time), then
    approved the authorize URL. The callback exchanged the code (HTTP 200), the
    new token sees team `AGE`, and the `client_credentials` token is dead.
