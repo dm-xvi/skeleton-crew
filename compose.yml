@@ -1,0 +1,49 @@
+# One Compose project per role; the role picks its profile and credentials:
+#   ROLE=coder docker compose -p coder up -d --build
+# No port is published on the host. The role's tunnel is the only way in, and it
+# routes the role's public hostname to http://bridge:3000 on this project's network.
+services:
+  bridge:
+    build:
+      context: .
+      dockerfile: bridge/Dockerfile
+    image: agent-bridge:latest
+    env_file:
+      - .env.shared
+      - credentials/${ROLE:?ROLE is required}/linear.env
+      - credentials/${ROLE}/github.env
+    environment:
+      ROLE: ${ROLE} # selects /app/roles/<role>/
+      PORT: "3000"
+      CLAUDE_CONFIG_DIR: /data/claude
+      # The container has no IPv6 route (see AGE-15); prefer IPv4 for outbound calls.
+      NODE_OPTIONS: --dns-result-order=ipv4first --network-family-autoselection-attempt-timeout=2000
+    expose: ["3000"]
+    volumes:
+      - data:/data # Linear tokens and Claude transcripts
+      - work:/work # repo clones and one worktree per session
+    secrets: [github_app_key] # appears at /run/secrets/github_app_key
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/healthz').then(r => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+    restart: unless-stopped
+
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    command: ["tunnel", "--no-autoupdate", "run"]
+    env_file: credentials/${ROLE}/tunnel.env # this role's TUNNEL_TOKEN only
+    depends_on:
+      bridge:
+        condition: service_healthy
+    restart: unless-stopped
+
+secrets:
+  github_app_key:
+    file: ./credentials/${ROLE}/github-app.pem
+
+volumes:
+  data: {} # Compose prefixes the project name: coder_data
+  work: {}

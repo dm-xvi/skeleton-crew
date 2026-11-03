@@ -1,0 +1,8 @@
+# Allowlist: the image needs only the bridge sources and the shipped role profiles.
+# Everything else, above all data/, credentials/ and .env.shared, stays out of the context.
+*
+!bridge/package.json
+!bridge/package-lock.json
+!bridge/tsconfig.json
+!bridge/src/
+!roles/

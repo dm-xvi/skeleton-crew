@@ -6,7 +6,12 @@ data/
 .env.*
 *.env
 !.env.example
+!.env.shared.example
 !*.example.env
+
+# Build output.
+node_modules/
+dist/
 
 # Everything under credentials/ is secret except example env files.
 credentials/**
