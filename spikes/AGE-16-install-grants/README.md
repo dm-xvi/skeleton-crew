@@ -66,6 +66,9 @@ bot that cannot be mentioned, delegated to or see a team.
 6. Revoked from the manage page again (no `OAuthApp` webhook this time), then
    approved the authorize URL. The callback exchanged the code (HTTP 200), the
    new token sees team `AGE`, and the `client_credentials` token is dead.
+7. Turned client credentials off on the OAuth app again. A delegation and a
+   mention each produced `AgentSessionEvent` / `created`, and the capture
+   service posted its thought with the new token.
 
 ## Notes for the bridge (AGE-19)
 
