@@ -14,7 +14,9 @@ install completes.
 With `EMIT_THOUGHT=1` (the default), the service posts one `thought` activity
 when a session is created or prompted. That keeps the session active, so Linear
 shows the stop control. The capture of the incoming event is written before the
-thought is sent, so the thought never changes a captured payload.
+thought is sent, so the thought never changes a captured payload. Thoughts use
+`data/oauth/token.json` unless `THOUGHT_TOKEN_FILE` names another token file
+(AGE-16 used it for a `client_credentials` token).
 
 ## Run
 
