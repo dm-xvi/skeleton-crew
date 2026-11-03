@@ -1,0 +1,13 @@
+# Placeholder profile for the coder role. AGE-12 (P1-2) loads and validates it;
+# AGE-25 (P2-3) writes the real v1 profile.
+name: coder
+model: default                  # Claude Code's default model
+permissionMode: acceptEdits
+maxTurns: 200
+allowedTools: [Read, Edit, Write, Grep, Glob, Bash]
+disallowedTools: ["Bash(git push *)", "Bash(gh *)"]
+bridgeTools: [open_pull_request, push_changes, get_pull_request, linear]
+triggers: [delegated, mentioned]
+github:
+  branchPrefix: claude/
+  draftPullRequests: true
