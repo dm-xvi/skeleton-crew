@@ -1,0 +1,22 @@
+# Throwaway stack for AGE-17: one Agent SDK query per `docker compose run --rm`.
+# Only claude.env reaches the container; nothing from the host shell is interpolated.
+name: claude-auth-resume
+
+services:
+  claude:
+    build: .
+    env_file: ../../credentials/coder/claude.env
+    environment:
+      # Transcripts land in $CLAUDE_CONFIG_DIR/projects/<cwd>/<sessionId>.jsonl.
+      CLAUDE_CONFIG_DIR: /data/claude
+      HOME: /data/home
+      # The container has no IPv6 route (see AGE-15); prefer IPv4 for api.anthropic.com.
+      NODE_OPTIONS: --dns-result-order=ipv4first --network-family-autoselection-attempt-timeout=2000
+    # A fixed cwd keeps every run in the same projects/ directory.
+    working_dir: /workspace
+    volumes:
+      - ./spike.mjs:/app/spike.mjs:ro
+      - ../../data/claude:/data/claude
+      - ../../data/claude-home:/data/home
+      - ../../data/claude-workspace:/workspace
+    entrypoint: ["node", "/app/spike.mjs"]
