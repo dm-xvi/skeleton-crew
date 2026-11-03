@@ -1,5 +1,14 @@
 # Secrets and runtime state never go in git.
-credentials/
 data/
+
+# Real env files are ignored everywhere; example templates are committed.
 .env
+.env.*
 *.env
+!.env.example
+!*.example.env
+
+# Everything under credentials/ is secret except example env files.
+credentials/**
+!credentials/**/
+!credentials/**/*.example.env
