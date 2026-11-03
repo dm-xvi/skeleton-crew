@@ -1,4 +1,4 @@
-# Webhook capture (AGE-15, throwaway)
+# Webhook capture ([AGE-15](https://linear.app/scriptorium/issue/AGE-15), throwaway)
 
 A zero-dependency Node service behind the coder's Cloudflare Tunnel. It answers
 200 to every request and writes method, path, query, headers and the raw body to
@@ -19,8 +19,8 @@ thought is sent, so the thought never changes a captured payload.
 ## Run
 
 ```bash
-docker compose -f spikes/webhook-capture/compose.yaml up -d
-docker compose -f spikes/webhook-capture/compose.yaml logs -f bridge
+docker compose -f spikes/AGE-15-webhook-capture/compose.yaml up -d
+docker compose -f spikes/AGE-15-webhook-capture/compose.yaml logs -f bridge
 ```
 
 ## Install the app (actor=app)
@@ -41,5 +41,5 @@ https://linear.app/oauth/authorize?client_id=<LINEAR_CLIENT_ID>&redirect_uri=<PU
 ## Stop
 
 ```bash
-docker compose -f spikes/webhook-capture/compose.yaml down
+docker compose -f spikes/AGE-15-webhook-capture/compose.yaml down
 ```

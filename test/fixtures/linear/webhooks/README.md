@@ -1,9 +1,9 @@
 # Linear webhook fixtures
 
-Real deliveries from the coder's OAuth app, captured on 2026-11-03 for AGE-15
-(P0-3) with [`spikes/webhook-capture`](../../../../spikes/webhook-capture/).
+Real deliveries from the coder's OAuth app, captured on 2026-11-03 for [AGE-15](https://linear.app/scriptorium/issue/AGE-15)
+(P0-3) with [`spikes/AGE-15-webhook-capture`](../../../../spikes/AGE-15-webhook-capture/).
 Personal data and secrets were replaced by
-[`scrub.mjs`](../../../../spikes/webhook-capture/scrub.mjs), and each body was
+[`scrub.mjs`](../../../../spikes/AGE-15-webhook-capture/scrub.mjs), and each body was
 re-signed.
 
 | Fixture | Event | How it was triggered |

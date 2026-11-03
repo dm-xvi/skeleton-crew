@@ -1,6 +1,6 @@
 // Turns raw captures from data/webhooks/ into committed test fixtures.
 //
-//   node spikes/webhook-capture/scrub.mjs <outDir> <fixtureName>=<captureFile> ...
+//   node spikes/AGE-15-webhook-capture/scrub.mjs <outDir> <fixtureName>=<captureFile> ...
 //
 // Personal data is found in the payloads themselves (every object with an
 // `email`), so no real value is written into this script. Each scrubbed body is
