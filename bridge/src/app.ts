@@ -67,6 +67,14 @@ export function createApp({ config, oauth, tokens, logger, now = Date.now }: App
 
     const tokenResponse = await oauth.exchangeCode(code);
     const appUser = await oauth.appUser(tokenResponse.access_token);
+    // /oauth/install is public. If the OAuth app is ever made public, someone else's
+    // workspace must not be able to replace the install.
+    const existing = await tokens.installation();
+    if (existing && existing.organizationId !== appUser.organizationId) {
+      logger.warn({ organizationId: appUser.organizationId }, "refused an install from another workspace");
+      text(res, 409, `${config.role.name} is already installed in another Linear workspace. Revoke it there first.`);
+      return;
+    }
     await tokens.save(tokenResponse, appUser);
     logger.info({ ...appUser, scope: tokenResponse.scope }, "installed in Linear");
     text(res, 200, `${config.role.name} is installed in Linear. You can close this page.`);

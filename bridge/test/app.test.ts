@@ -155,6 +155,20 @@ describe("GET /oauth/callback", () => {
     expect(await res.text()).toMatch(/access_denied/);
   });
 
+  test("reinstalls into the same workspace", async () => {
+    await installed();
+    await installed();
+    expect(JSON.parse(readFileSync(tokenFile, "utf8")).accessToken).toBe("secret-access-2");
+  });
+
+  test("refuses an install from another workspace", async () => {
+    await installed();
+    linear.organizationId = "another-workspace";
+    const state = (await startInstall()).searchParams.get("state")!;
+    expect((await callback({ code: "secret-code", state })).status).toBe(409);
+    expect(JSON.parse(readFileSync(tokenFile, "utf8")).accessToken).toBe("secret-access-1");
+  });
+
   test("refuses a token that belongs to a person", async () => {
     linear.viewerIsApp = false;
     const state = (await startInstall()).searchParams.get("state")!;

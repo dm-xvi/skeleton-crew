@@ -13,6 +13,7 @@ export interface FakeLinear {
   // The token request waits on this when set, to hold a refresh in flight.
   tokenGate?: Promise<void>;
   viewerIsApp: boolean;
+  organizationId: string;
 }
 
 export function fakeLinear(): FakeLinear {
@@ -20,15 +21,17 @@ export function fakeLinear(): FakeLinear {
   const linear: FakeLinear = {
     tokenRequests: [],
     viewerIsApp: true,
+    organizationId: ORGANIZATION_ID,
     fetch: async (input, init) => {
       const url = String(input);
       if (url === "https://api.linear.app/oauth/token") {
         const params = new URLSearchParams(String(init?.body));
         linear.tokenRequests.push(params);
-        await linear.tokenGate;
+        // Decided on arrival, so a request held at the gate keeps its outcome.
         const failure = linear.failNextToken;
+        linear.failNextToken = undefined;
+        await linear.tokenGate;
         if (failure) {
-          linear.failNextToken = undefined;
           return Response.json({ error: failure.error }, { status: failure.status });
         }
         issued++;
@@ -42,7 +45,7 @@ export function fakeLinear(): FakeLinear {
       }
       if (url === "https://api.linear.app/graphql") {
         return Response.json({
-          data: { viewer: { id: APP_USER_ID, app: linear.viewerIsApp, organization: { id: ORGANIZATION_ID } } },
+          data: { viewer: { id: APP_USER_ID, app: linear.viewerIsApp, organization: { id: linear.organizationId } } },
         });
       }
       throw new Error(`fake Linear has no route for ${url}`);

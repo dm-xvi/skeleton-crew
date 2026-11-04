@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync, existsSync 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pino } from "pino";
-import { afterAll, beforeEach, describe, expect, test } from "vitest";
+import { afterAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { LinearOAuth } from "../src/linearOAuth.js";
 import { NotInstalledError, TokenStore } from "../src/tokenStore.js";
 import { APP_USER_ID, ORGANIZATION_ID, fakeLinear, type FakeLinear } from "./fakeLinear.js";
@@ -152,10 +152,27 @@ describe("TokenStore", () => {
     let release!: () => void;
     linear.tokenGate = new Promise((resolve) => (release = resolve));
     const pending = tokens.accessToken();
+    await vi.waitFor(() => expect(linear.tokenRequests).toHaveLength(2));
     await tokens.clear("test revoke");
     release();
     await expect(pending).rejects.toBeInstanceOf(NotInstalledError);
     expect(existsSync(file)).toBe(false);
+  });
+
+  test("a refused refresh does not delete a reinstall that landed meanwhile", async () => {
+    const tokens = store();
+    await install(tokens);
+    clock = START + 25 * HOUR;
+    let release!: () => void;
+    linear.tokenGate = new Promise((resolve) => (release = resolve));
+    linear.failNextToken = { status: 400, error: "invalid_grant" };
+    const pending = tokens.accessToken();
+    await vi.waitFor(() => expect(linear.tokenRequests).toHaveLength(2));
+    linear.tokenGate = undefined;
+    await install(tokens);
+    release();
+    expect(await pending).toBe("secret-access-2");
+    expect(stored().accessToken).toBe("secret-access-2");
   });
 
   test("treats an unreadable file as not installed and names only the bad fields", async () => {

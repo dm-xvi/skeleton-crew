@@ -101,22 +101,25 @@ export class TokenStore {
     } catch (err) {
       // 400 (invalid_grant) or 401: the refresh token is dead, so the install is.
       // Anything else (a network error, a 5xx) may pass, so keep the tokens.
-      if (err instanceof LinearOAuthError && (err.status === 400 || err.status === 401)) {
-        await this.clear(`token refresh refused: ${err.message}`);
-        throw new NotInstalledError("Linear refused the token refresh");
-      }
-      throw err;
+      const refused = err instanceof LinearOAuthError && (err.status === 400 || err.status === 401);
+      if (!refused) throw err;
+      if (generation !== this.#generation) return this.#currentAccessToken();
+      await this.clear(`token refresh refused: ${err.message}`);
+      throw new NotInstalledError("Linear refused the token refresh");
     }
-    if (generation !== this.#generation) {
-      // Revoked or reinstalled meanwhile: the file has the answer, not these tokens.
-      const current = await this.#read();
-      if (!current) throw new NotInstalledError("revoked while refreshing");
-      return current.accessToken;
-    }
+    if (generation !== this.#generation) return this.#currentAccessToken();
     const refreshed = this.#fromResponse(tokens, stored);
     await this.#write(refreshed);
     this.#logger.info({ expiresAt: refreshed.expiresAt }, "refreshed the Linear access token");
     return refreshed.accessToken;
+  }
+
+  // After a revoke or reinstall during a refresh, the file has the answer, not the
+  // refresh's result.
+  async #currentAccessToken(): Promise<string> {
+    const current = await this.#read();
+    if (!current) throw new NotInstalledError("revoked while refreshing");
+    return current.accessToken;
   }
 
   #fromResponse(tokens: TokenResponse, appUser: AppUser): Installation {
