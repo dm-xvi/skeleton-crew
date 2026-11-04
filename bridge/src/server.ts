@@ -1,6 +1,16 @@
 import { createServer } from "node:http";
+import { ConfigError, loadConfig, type Config } from "./config.js";
 
-const port = Number(process.env.PORT ?? 3000);
+let config: Config;
+try {
+  config = loadConfig(process.env);
+} catch (err) {
+  if (!(err instanceof ConfigError)) throw err;
+  console.error(`${err.message}\nThe bridge will not start until these are fixed.`);
+  process.exit(1);
+}
+const { port } = config;
+console.log(`loaded role ${config.role.name}`);
 
 const server = createServer((req, res) => {
   const { pathname } = new URL(req.url ?? "/", "http://bridge");
