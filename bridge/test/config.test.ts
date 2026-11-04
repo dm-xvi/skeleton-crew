@@ -164,6 +164,12 @@ describe("loadConfig", () => {
     ]);
   });
 
+  test("checks DATA_DIR", () => {
+    expect(loadConfig(validEnv, repoRolesDir).dataDir).toBe("/data");
+    expect(loadConfig({ ...validEnv, DATA_DIR: "/tmp/data" }, repoRolesDir).dataDir).toBe("/tmp/data");
+    expect(problemsFor({ ...validEnv, DATA_DIR: "data" })).toEqual(["DATA_DIR must be an absolute path."]);
+  });
+
   test("checks LOG_LEVEL", () => {
     expect(() => loadConfig({ ...validEnv, LOG_LEVEL: "debug" }, repoRolesDir)).not.toThrow();
     expect(problemsFor({ ...validEnv, LOG_LEVEL: "verbose" })).toEqual([
