@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterAll, describe, expect, test } from "@jest/globals";
+import { afterAll, describe, expect, test } from "vitest";
 import { ConfigError, loadConfig } from "../src/config.js";
 
 // The repo's shipped profiles, as the image copies them to /app/roles.
