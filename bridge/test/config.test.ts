@@ -90,8 +90,9 @@ describe("loadConfig", () => {
     expect(problems).toHaveLength(6);
   });
 
-  test("requires ROLE", () => {
+  test("requires ROLE before looking for a profile", () => {
     expect(problemsFor({ ...validEnv, ROLE: undefined })).toEqual(["ROLE is missing or empty."]);
+    expect(problemsFor({ ...validEnv, ROLE: "" })).toEqual(["ROLE is missing or empty."]);
   });
 
   test("rejects a ROLE that is not a plain name", () => {

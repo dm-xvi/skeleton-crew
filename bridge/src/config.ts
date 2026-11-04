@@ -54,6 +54,7 @@ export interface Config {
 
 // Empty counts as missing: `KEY=` in an env file sets an empty string.
 const requiredEnv = [
+  "ROLE",
   "CLAUDE_CODE_OAUTH_TOKEN",
   "LINEAR_CLIENT_ID",
   "LINEAR_CLIENT_SECRET",
@@ -106,7 +107,8 @@ export function loadConfig(env: Env, rolesDir = DEFAULT_ROLES_DIR): Config {
     problems.push("PORT must be an integer from 1 to 65535.");
   }
 
-  const role = loadRole(env.ROLE, rolesDir, problems);
+  // A missing ROLE is already reported with the other required variables.
+  const role = env.ROLE ? loadRole(env.ROLE, rolesDir, problems) : undefined;
 
   if (problems.length > 0) throw new ConfigError(problems);
 
@@ -124,14 +126,10 @@ export function loadConfig(env: Env, rolesDir = DEFAULT_ROLES_DIR): Config {
 }
 
 function loadRole(
-  roleName: string | undefined,
+  roleName: string,
   rolesDir: string,
   problems: string[],
 ): RoleProfile | undefined {
-  if (!roleName) {
-    problems.push("ROLE is missing or empty.");
-    return undefined;
-  }
   // ROLE becomes a path segment, so keep it to a plain name.
   if (!/^[a-z][a-z0-9-]*$/.test(roleName)) {
     problems.push("ROLE must be lowercase letters, digits and hyphens, starting with a letter.");
