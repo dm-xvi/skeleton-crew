@@ -1,0 +1,14 @@
+{
+  "capturedAt": "2026-11-03T21:03:45.058Z",
+  "method": "POST",
+  "path": "/webhooks/linear",
+  "headers": {
+    "content-type": "application/json; charset=utf-8",
+    "user-agent": "Linear-Webhook",
+    "linear-delivery": "FFFFFFFF-4a13-45f6-a967-69755965bada",
+    "linear-event": "OAuthApp",
+    "linear-signature": "ed00c2aaebe006399f62066872a670058488946fcebe5d347228149981e994ac",
+    "linear-timestamp": "1793739824385"
+  },
+  "body": "{\"type\":\"OAuthApp\",\"action\":\"revoked\",\"createdAt\":\"2026-11-03T21:03:44.380Z\",\"organizationId\":\"724adc74-61a9-4c01-8584-2a37b85f3118\",\"oauthClientId\":\"00000000000000000000000000000000\",\"webhookTimestamp\":1793739824385,\"webhookId\":\"d0347716-4a13-45f6-a967-69755965bada\"}"
+}
