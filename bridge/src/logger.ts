@@ -5,10 +5,17 @@ import { pino, type Level } from "pino";
 
 type Env = Record<string, string | undefined>;
 
-const levels = Object.keys(pino.levels.values);
+export const logLevels = [
+  "fatal",
+  "error",
+  "warn",
+  "info",
+  "debug",
+  "trace",
+] as const satisfies readonly Level[];
 
 export function isLogLevel(value: string): value is Level {
-  return levels.includes(value);
+  return (logLevels as readonly string[]).includes(value);
 }
 
 // LOG_LEVEL wins. Otherwise development logs everything and the image (NODE_ENV=production)

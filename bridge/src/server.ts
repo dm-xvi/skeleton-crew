@@ -2,6 +2,13 @@ import { createServer } from "node:http";
 import { ConfigError, loadConfig, type Config } from "./config.js";
 import { logger } from "./logger.js";
 
+// Crashes go through the logger too, so every line on stdout stays JSON.
+// Unhandled promise rejections arrive here as well.
+process.on("uncaughtException", (err) => {
+  logger.fatal({ err }, "uncaught exception; the bridge is stopping");
+  process.exit(1);
+});
+
 let config: Config;
 try {
   config = loadConfig(process.env);

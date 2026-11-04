@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import type { PermissionMode } from "@anthropic-ai/claude-agent-sdk";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
-import { isLogLevel } from "./logger.js";
+import { isLogLevel, logLevels } from "./logger.js";
 
 // The image copies roles/ to /app/roles; dist/config.js sits in /app/dist.
 const DEFAULT_ROLES_DIR = fileURLToPath(new URL("../roles/", import.meta.url));
@@ -104,7 +104,7 @@ export function loadConfig(env: Env, rolesDir = DEFAULT_ROLES_DIR): Config {
   }
 
   if (env.LOG_LEVEL && !isLogLevel(env.LOG_LEVEL)) {
-    problems.push("LOG_LEVEL must be one of fatal, error, warn, info, debug or trace.");
+    problems.push(`LOG_LEVEL must be one of ${logLevels.join(", ")}.`);
   }
 
   const port = Number(env.PORT ?? 3000);

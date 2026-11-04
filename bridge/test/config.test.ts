@@ -167,7 +167,7 @@ describe("loadConfig", () => {
   test("checks LOG_LEVEL", () => {
     expect(() => loadConfig({ ...validEnv, LOG_LEVEL: "debug" }, repoRolesDir)).not.toThrow();
     expect(problemsFor({ ...validEnv, LOG_LEVEL: "verbose" })).toEqual([
-      "LOG_LEVEL must be one of fatal, error, warn, info, debug or trace.",
+      "LOG_LEVEL must be one of fatal, error, warn, info, debug, trace.",
     ]);
   });
 });
