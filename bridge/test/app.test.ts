@@ -1,3 +1,4 @@
+import { createHmac } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -5,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { pino } from "pino";
-import { afterAll, afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { createApp } from "../src/app.js";
 import { loadConfig } from "../src/config.js";
 import { LinearOAuth } from "../src/linearOAuth.js";
@@ -89,6 +90,13 @@ async function installed(): Promise<void> {
 
 function postWebhook(body: string, headers: Record<string, string>): Promise<Response> {
   return fetch(`${base}/webhooks/linear`, { method: "POST", headers, body });
+}
+
+// The SDK checks webhookTimestamp against Date.now(), and the fixtures are from
+// 2026-11-03. Move Date (only) to just after the delivery was sent.
+function deliveredAfter(f: Fixture, ms: number): void {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(JSON.parse(f.body).webhookTimestamp + ms);
 }
 
 describe("GET /oauth/install", () => {
@@ -189,16 +197,39 @@ describe("GET /oauth/callback", () => {
 });
 
 describe("POST /webhooks/linear", () => {
+  afterEach(() => vi.useRealTimers());
+
   test("an OAuthApp revoked webhook deletes the stored tokens", async () => {
     await installed();
-    const { headers, body } = fixture("oauth-app-revoked");
-    expect((await postWebhook(body, headers)).status).toBe(200);
+    const revoked = fixture("oauth-app-revoked");
+    deliveredAfter(revoked, 500);
+    expect((await postWebhook(revoked.body, revoked.headers)).status).toBe(200);
     expect(existsSync(tokenFile)).toBe(false);
+  });
+
+  test("a stale delivery is rejected and changes nothing", async () => {
+    await installed();
+    const revoked = fixture("oauth-app-revoked");
+    deliveredAfter(revoked, 61_000);
+    expect((await postWebhook(revoked.body, revoked.headers)).status).toBe(401);
+    expect(existsSync(tokenFile)).toBe(true);
+    expect(logLines.join("")).toMatch(/Invalid webhook timestamp/);
+  });
+
+  test("a revoke for another OAuth client changes nothing", async () => {
+    await installed();
+    const revoked = fixture("oauth-app-revoked");
+    const body = revoked.body.replace(CLIENT_ID, "f".repeat(32));
+    const signature = createHmac("sha256", FIXTURE_WEBHOOK_SECRET).update(body).digest("hex");
+    deliveredAfter(revoked, 500);
+    expect((await postWebhook(body, { ...revoked.headers, "linear-signature": signature })).status).toBe(200);
+    expect(existsSync(tokenFile)).toBe(true);
   });
 
   test("a bad signature is rejected and changes nothing", async () => {
     await installed();
     const { headers, body } = fixture("oauth-app-revoked");
+    deliveredAfter({ headers, body }, 500);
     const forged = { ...headers, "linear-signature": "0".repeat(64) };
     expect((await postWebhook(body, forged)).status).toBe(401);
     const { "linear-signature": _, ...unsigned } = headers;
@@ -209,6 +240,7 @@ describe("POST /webhooks/linear", () => {
   test("a body changed after signing is rejected", async () => {
     await installed();
     const { headers, body } = fixture("oauth-app-revoked");
+    deliveredAfter({ headers, body }, 500);
     expect((await postWebhook(body.replace("revoked", "revoked "), headers)).status).toBe(401);
     expect(existsSync(tokenFile)).toBe(true);
   });
@@ -216,6 +248,7 @@ describe("POST /webhooks/linear", () => {
   test("other events are acknowledged and leave the tokens alone", async () => {
     await installed();
     const { headers, body } = fixture("agent-session-created-delegation");
+    deliveredAfter({ headers, body }, 500);
     expect((await postWebhook(body, headers)).status).toBe(200);
     expect(existsSync(tokenFile)).toBe(true);
   });

@@ -2,23 +2,21 @@
 // routes, so tests can drive it with a fake Linear.
 import { randomBytes } from "node:crypto";
 import type { IncomingMessage, RequestListener, ServerResponse } from "node:http";
+import {
+  LINEAR_WEBHOOK_SIGNATURE_HEADER,
+  LinearWebhookClient,
+  type LinearWebhookPayload,
+  type OAuthAppWebhookPayload,
+} from "@linear/sdk/webhooks";
 import type { Logger } from "pino";
-import { z } from "zod";
 import type { Config } from "./config.js";
 import type { LinearOAuth } from "./linearOAuth.js";
-import { hasValidSignature } from "./linearWebhook.js";
 import type { TokenStore } from "./tokenStore.js";
 
 // Long enough to read Linear's consent screen and approve.
 const INSTALL_STATE_TTL_MS = 10 * 60 * 1000;
 // Linear's payloads are a few KB; anything this big is not from Linear.
 const MAX_BODY_BYTES = 1024 * 1024;
-
-const oauthAppEventSchema = z.object({
-  type: z.literal("OAuthApp"),
-  action: z.string(),
-  oauthClientId: z.string(),
-});
 
 export interface AppDeps {
   config: Config;
@@ -32,6 +30,9 @@ export function createApp({ config, oauth, tokens, logger, now = Date.now }: App
   // One-time CSRF states for installs in flight, with their expiry. In memory is
   // enough: an install that spans a restart just starts over.
   const installStates = new Map<string, number>();
+  // Checks the HMAC over the raw body and that the signed webhookTimestamp is within
+  // 60 s of now (FR-201, FR-202). AGE-20 adds de-duplication and the queue.
+  const webhooks = new LinearWebhookClient(config.linear.webhookSecret);
 
   function install(res: ServerResponse): void {
     const at = now();
@@ -86,23 +87,20 @@ export function createApp({ config, oauth, tokens, logger, now = Date.now }: App
       res.writeHead(413).end();
       return;
     }
-    const signature = req.headers["linear-signature"];
-    if (!hasValidSignature(body, typeof signature === "string" ? signature : undefined, config.linear.webhookSecret)) {
-      logger.warn({ delivery: req.headers["linear-delivery"] }, "rejected a webhook with a bad signature");
+    const signature = req.headers[LINEAR_WEBHOOK_SIGNATURE_HEADER];
+    let payload: LinearWebhookPayload;
+    try {
+      // Throws on a bad signature or a stale timestamp; never returns false.
+      payload = webhooks.parseData(body, typeof signature === "string" ? signature : "");
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      logger.warn({ delivery: req.headers["linear-delivery"], reason }, "rejected a webhook");
       res.writeHead(401).end();
       return;
     }
-
-    let payload: unknown;
-    try {
-      payload = JSON.parse(body.toString("utf8"));
-    } catch {
-      res.writeHead(400).end();
-      return;
-    }
-    const event = oauthAppEventSchema.safeParse(payload);
-    if (event.success && event.data.action === "revoked") {
-      if (event.data.oauthClientId === config.linear.clientId) {
+    // The SDK types `type` as a plain string, so the union does not narrow on it.
+    if (payload.type === "OAuthApp" && payload.action === "revoked") {
+      if ((payload as OAuthAppWebhookPayload).oauthClientId === config.linear.clientId) {
         await tokens.clear("Linear sent an OAuthApp revoked webhook");
       } else {
         logger.warn("ignoring an OAuthApp revoked webhook for another client");
