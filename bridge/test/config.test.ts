@@ -163,4 +163,11 @@ describe("loadConfig", () => {
       "PORT must be an integer from 1 to 65535.",
     ]);
   });
+
+  test("checks LOG_LEVEL", () => {
+    expect(() => loadConfig({ ...validEnv, LOG_LEVEL: "debug" }, repoRolesDir)).not.toThrow();
+    expect(problemsFor({ ...validEnv, LOG_LEVEL: "verbose" })).toEqual([
+      "LOG_LEVEL must be one of fatal, error, warn, info, debug, trace.",
+    ]);
+  });
 });
