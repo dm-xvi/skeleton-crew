@@ -1,11 +1,14 @@
 import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { pino } from "pino";
 import { afterAll, beforeEach, describe, expect, test, vi } from "vitest";
+import { buildContainer } from "../src/container.js";
 import { LinearOAuth } from "../src/linearOAuth.js";
 import { NotInstalledError, TokenStore } from "../src/tokenStore.js";
+import { CLOCK, FETCH } from "../src/tokens.js";
 import { APP_USER_ID, ORGANIZATION_ID, fakeLinear, type FakeLinear } from "./fakeLinear.js";
+import { captureLogs } from "./logs.js";
+import { testConfig } from "./testConfig.js";
 
 const START = Date.parse("2026-11-04T12:00:00.000Z");
 const HOUR = 60 * 60 * 1000;
@@ -13,19 +16,32 @@ const HOUR = 60 * 60 * 1000;
 const tempDirs: string[] = [];
 afterAll(() => tempDirs.forEach((dir) => rmSync(dir, { recursive: true, force: true })));
 
+// Each test runs against a TokenStore built both ways: by hand, as a unit, and by
+// the app's container, which must keep its refresh and revoke guards working.
+type Build = "constructed directly" | "built by the container";
+
+let build: Build;
 let linear: FakeLinear;
+let dataDir: string;
 let file: string;
 let clock: number;
 let logLines: string[];
 
 function store(): TokenStore {
+  const { logger, lines } = captureLogs();
+  logLines = lines;
+  if (build === "built by the container") {
+    const c = buildContainer(testConfig(dataDir), logger);
+    c.registerInstance(FETCH, linear.fetch);
+    c.registerInstance(CLOCK, () => clock);
+    return c.resolve(TokenStore);
+  }
   const oauth = new LinearOAuth({
     clientId: "client-id",
     clientSecret: "secret-client-secret",
     redirectUri: "https://coder.example.com/oauth/callback",
     fetch: linear.fetch,
   });
-  const logger = pino({ level: "trace" }, { write: (line: string) => void logLines.push(line) });
   return new TokenStore({ file, oauth, logger, now: () => clock });
 }
 
@@ -46,15 +62,19 @@ async function install(tokens: TokenStore): Promise<void> {
 }
 
 beforeEach(() => {
-  const dir = mkdtempSync(join(tmpdir(), "tokens-"));
-  tempDirs.push(dir);
-  file = join(dir, "linear", "tokens.json");
+  dataDir = mkdtempSync(join(tmpdir(), "tokens-"));
+  tempDirs.push(dataDir);
+  file = join(dataDir, "linear", "tokens.json");
   linear = fakeLinear();
   clock = START;
   logLines = [];
 });
 
-describe("TokenStore", () => {
+describe.each<Build>(["constructed directly", "built by the container"])("TokenStore %s", (how) => {
+  beforeEach(() => {
+    build = how;
+  });
+
   test("is not installed without a file", async () => {
     const tokens = store();
     expect(await tokens.installation()).toBeUndefined();
