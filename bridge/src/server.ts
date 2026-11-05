@@ -4,10 +4,8 @@ import { createServer } from "node:http";
 import { createApp } from "./app.js";
 import { ConfigError, loadConfig, type Config } from "./config.js";
 import { buildContainer } from "./container.js";
-import { LinearOAuth } from "./linearOAuth.js";
 import { logger } from "./logger.js";
 import { TokenStore } from "./tokenStore.js";
-import { CLOCK } from "./tokens.js";
 
 // Crashes go through the logger too, so every line on stdout stays JSON.
 // Unhandled promise rejections arrive here as well.
@@ -30,18 +28,18 @@ try {
 const { port } = config;
 logger.info({ role: config.role.name }, "loaded role");
 
-// Resolved before listening, so a broken registration stops the bridge at startup.
+// createApp resolves every controller, and with them every service, before the
+// bridge listens: a broken registration stops it at startup.
 const c = buildContainer(config, logger);
-const oauth = c.resolve(LinearOAuth);
-const tokens = c.resolve(TokenStore);
-const installation = await tokens.installation();
+const app = createApp(c);
+const installation = await c.resolve(TokenStore).installation();
 if (installation) {
   logger.info({ appUserId: installation.appUserId }, "found the Linear install");
 } else {
   logger.warn(`not installed in Linear yet; visit ${config.linear.publicUrl}/oauth/install`);
 }
 
-const server = createServer(createApp({ config, oauth, tokens, logger, now: c.resolve(CLOCK) }));
+const server = createServer(app);
 
 // Listen on every interface: the tunnel reaches the bridge over the Compose network.
 server.listen(port, "0.0.0.0", () => {

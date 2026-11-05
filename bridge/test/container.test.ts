@@ -1,12 +1,15 @@
 import { mkdtempSync, readFileSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { DependencyContainer } from "tsyringe";
+import { container as root, type DependencyContainer } from "tsyringe";
 import { afterAll, beforeEach, describe, expect, test, vi } from "vitest";
+import { createApp } from "../src/app.js";
 import { buildContainer } from "../src/container.js";
 import { LinearOAuth } from "../src/linearOAuth.js";
+import { OAuthController } from "../src/oauthController.js";
 import { NotInstalledError, TokenStore } from "../src/tokenStore.js";
 import { CLOCK, FETCH } from "../src/tokens.js";
+import { WebhookController } from "../src/webhookController.js";
 import { fakeLinear, type FakeLinear } from "./fakeLinear.js";
 import { captureLogs } from "./logs.js";
 import { testConfig } from "./testConfig.js";
@@ -53,6 +56,15 @@ describe("one app's container", () => {
     expect(c.resolve(LinearOAuth)).toBe(c.resolve(LinearOAuth));
   });
 
+  // createApp binds each controller's handlers once, so an HTTP test would pass even
+  // with a transient controller. Its install states must be one Map for the whole app.
+  test("holds one of each controller after createApp", () => {
+    const c = app();
+    createApp(c);
+    expect(c.resolve(OAuthController)).toBe(c.resolve(OAuthController));
+    expect(c.resolve(WebhookController)).toBe(c.resolve(WebhookController));
+  });
+
   test("runs one refresh for callers holding separately resolved TokenStores", async () => {
     const c = app();
     await install(c);
@@ -89,6 +101,8 @@ describe("two apps' containers", () => {
     const [a, b] = [app(), app()];
     expect(a.resolve(TokenStore)).not.toBe(b.resolve(TokenStore));
     expect(a.resolve(LinearOAuth)).not.toBe(b.resolve(LinearOAuth));
+    expect(a.resolve(OAuthController)).not.toBe(b.resolve(OAuthController));
+    expect(a.resolve(WebhookController)).not.toBe(b.resolve(WebhookController));
   });
 
   // Two tests in a row, each building its own app, as every test file does.
@@ -101,5 +115,22 @@ describe("two apps' containers", () => {
   test("the next test's app does not see it", () => {
     expect(fromEarlierTest).toBeInstanceOf(TokenStore);
     expect(app().resolve(TokenStore)).not.toBe(fromEarlierTest);
+  });
+});
+
+describe("startup", () => {
+  test("createApp throws when a registration is missing", () => {
+    // A child of the global container with nothing registered, as if buildContainer forgot CONFIG.
+    expect(() => createApp(root.createChildContainer())).toThrow(/unregistered dependency token: "Symbol\(Config\)"/);
+  });
+
+  test("createApp throws when a service cannot be built", () => {
+    const c = app();
+    c.register(LinearOAuth, {
+      useFactory: () => {
+        throw new Error("LinearOAuth is misconfigured");
+      },
+    });
+    expect(() => createApp(c)).toThrow(/LinearOAuth is misconfigured/);
   });
 });

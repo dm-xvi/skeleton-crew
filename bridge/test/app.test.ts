@@ -5,13 +5,15 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { pino } from "pino";
+import type { DependencyContainer } from "tsyringe";
 import { afterAll, afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { createApp } from "../src/app.js";
 import { loadConfig } from "../src/config.js";
-import { LinearOAuth } from "../src/linearOAuth.js";
-import { TokenStore } from "../src/tokenStore.js";
+import { buildContainer } from "../src/container.js";
+import { NotInstalledError, TokenStore } from "../src/tokenStore.js";
+import { CLOCK, FETCH } from "../src/tokens.js";
 import { APP_USER_ID, fakeLinear, type FakeLinear } from "./fakeLinear.js";
+import { captureLogs } from "./logs.js";
 
 const repoRolesDir = fileURLToPath(new URL("../../roles/", import.meta.url));
 const fixturesDir = fileURLToPath(new URL("../../test/fixtures/linear/webhooks/", import.meta.url));
@@ -32,6 +34,7 @@ function fixture(name: string): Fixture {
 const tempDirs: string[] = [];
 afterAll(() => tempDirs.forEach((dir) => rmSync(dir, { recursive: true, force: true })));
 
+let c: DependencyContainer;
 let server: Server;
 let base: string;
 let linear: FakeLinear;
@@ -55,18 +58,15 @@ beforeEach(async () => {
     repoRolesDir,
   );
   linear = fakeLinear();
-  logLines = [];
   clock = Date.parse("2026-11-04T12:00:00.000Z");
-  const logger = pino({ level: "trace" }, { write: (line: string) => void logLines.push(line) });
-  const oauth = new LinearOAuth({
-    clientId: config.linear.clientId,
-    clientSecret: config.linear.clientSecret,
-    redirectUri: `${config.linear.publicUrl}/oauth/callback`,
-    fetch: linear.fetch,
-  });
+  const { logger, lines } = captureLogs();
+  logLines = lines;
   tokenFile = join(dataDir, "linear", "tokens.json");
-  const tokens = new TokenStore({ file: tokenFile, oauth, logger, now: () => clock });
-  server = createServer(createApp({ config, oauth, tokens, logger, now: () => clock }));
+  // A fresh container per test, with only Linear and the clock swapped.
+  c = buildContainer(config, logger);
+  c.registerInstance(FETCH, linear.fetch);
+  c.registerInstance(CLOCK, () => clock);
+  server = createServer(createApp(c));
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 });
@@ -252,9 +252,109 @@ describe("POST /webhooks/linear", () => {
     expect((await postWebhook(body, headers)).status).toBe(200);
     expect(existsSync(tokenFile)).toBe(true);
   });
+
+  // The webhook clears the controller's TokenStore. Only if that is the app's one
+  // TokenStore does the revoke stop a refresh another consumer has in flight.
+  test("a revoke stops a refresh in flight elsewhere in the app from writing back", async () => {
+    await installed();
+    clock += 25 * 60 * 60 * 1000;
+    let release!: () => void;
+    linear.tokenGate = new Promise((resolve) => (release = resolve));
+    const pending = c.resolve(TokenStore).accessToken();
+    await vi.waitFor(() => expect(linear.tokenRequests).toHaveLength(2));
+    const revoked = fixture("oauth-app-revoked");
+    deliveredAfter(revoked, 500);
+    expect((await postWebhook(revoked.body, revoked.headers)).status).toBe(200);
+    release();
+    await expect(pending).rejects.toBeInstanceOf(NotInstalledError);
+    expect(existsSync(tokenFile)).toBe(false);
+  });
+
+  test("a signed body verifies whatever its content type", async () => {
+    await installed();
+    const revoked = fixture("oauth-app-revoked");
+    deliveredAfter(revoked, 500);
+    for (const contentType of ["application/json", "text/plain", "application/octet-stream"]) {
+      const res = await postWebhook(revoked.body, { ...revoked.headers, "content-type": contentType });
+      expect(res.status).toBe(200);
+    }
+    expect(existsSync(tokenFile)).toBe(false);
+  });
+
+  test("a body over 1 MB gets an empty 413", async () => {
+    const res = await fetch(`${base}/webhooks/linear`, { method: "POST", body: Buffer.alloc(1024 * 1024 + 1) });
+    expect(res.status).toBe(413);
+    expect(res.headers.get("content-type")).toBeNull();
+    expect(await res.text()).toBe("");
+  });
+
+  test("a body of exactly 1 MB is read and checked", async () => {
+    const res = await fetch(`${base}/webhooks/linear`, { method: "POST", body: Buffer.alloc(1024 * 1024) });
+    expect(res.status).toBe(401);
+  });
+
+  test("a compressed body is not decompressed and gets an empty 401", async () => {
+    await installed();
+    const { headers, body } = fixture("oauth-app-revoked");
+    deliveredAfter({ headers, body }, 500);
+    const res = await postWebhook(body, { ...headers, "content-encoding": "gzip" });
+    expect(res.status).toBe(401);
+    expect(await res.text()).toBe("");
+    expect(existsSync(tokenFile)).toBe(true);
+  });
+
+  test("a request with no body gets an empty 401", async () => {
+    const res = await fetch(`${base}/webhooks/linear`, { method: "POST" });
+    expect(res.status).toBe(401);
+    expect(await res.text()).toBe("");
+  });
 });
 
 test("GET /healthz still answers", async () => {
   const res = await fetch(`${base}/healthz`);
   expect(res.status).toBe(200);
+});
+
+describe("the OAuth install across requests", () => {
+  test("an install link from /oauth/install is accepted at /oauth/callback", async () => {
+    const first = (await startInstall()).searchParams.get("state")!;
+    const second = (await startInstall()).searchParams.get("state")!;
+    expect((await callback({ code: "secret-code", state: first })).status).toBe(200);
+    expect((await callback({ code: "secret-code", state: second })).status).toBe(200);
+  });
+});
+
+describe("routing", () => {
+  test.each([
+    ["GET", "/nope"],
+    ["POST", "/healthz"],
+    ["GET", "/webhooks/linear"],
+    ["GET", "/HEALTHZ"],
+    ["GET", "/healthz/"],
+    ["HEAD", "/healthz"],
+    ["HEAD", "/oauth/install"],
+    ["OPTIONS", "/healthz"],
+  ])("%s %s gets an empty 404", async (method, path) => {
+    const res = await fetch(`${base}${path}`, { method, redirect: "manual" });
+    expect(res.status).toBe(404);
+    expect(res.headers.get("content-type")).toBeNull();
+    expect(await res.text()).toBe("");
+  });
+
+  test("an unexpected error gets the plain-text 500", async () => {
+    linear.viewerIsApp = false;
+    const state = (await startInstall()).searchParams.get("state")!;
+    const res = await callback({ code: "secret-code", state });
+    expect(res.status).toBe(500);
+    expect(res.headers.get("content-type")).toBe("text/plain; charset=utf-8");
+    expect(await res.text()).toBe("Something went wrong. The bridge log has the details.\n");
+    expect(logLines.join("")).toMatch(/"route":"GET \/oauth\/callback".*"msg":"request failed"/);
+  });
+
+  test("adds no Express headers", async () => {
+    const res = await fetch(`${base}/healthz`);
+    expect(res.headers.get("x-powered-by")).toBeNull();
+    expect(res.headers.get("etag")).toBeNull();
+    expect(await res.text()).toBe("ok\n");
+  });
 });

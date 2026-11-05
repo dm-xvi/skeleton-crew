@@ -6,8 +6,10 @@ import type { Logger } from "pino";
 import { container as root, instanceCachingFactory, type DependencyContainer } from "tsyringe";
 import type { Config } from "./config.js";
 import { LinearOAuth } from "./linearOAuth.js";
+import { OAuthController } from "./oauthController.js";
 import { TokenStore } from "./tokenStore.js";
 import { CLOCK, CONFIG, FETCH, LOGGER } from "./tokens.js";
+import { WebhookController } from "./webhookController.js";
 
 export function buildContainer(config: Config, logger: Logger): DependencyContainer {
   // A child per app, so two apps (or two tests) never share a singleton. Nothing
@@ -47,6 +49,11 @@ export function buildContainer(config: Config, logger: Logger): DependencyContai
         }),
     ),
   });
+
+  // Singletons: OAuthController's install states must be the same at
+  // /oauth/install and /oauth/callback. WebhookController holds the webhook client.
+  c.registerSingleton(OAuthController);
+  c.registerSingleton(WebhookController);
 
   return c;
 }
