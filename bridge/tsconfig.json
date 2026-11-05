@@ -6,6 +6,9 @@
     "rootDir": "src",
     "outDir": "dist",
     "strict": true,
+    // tsyringe reads constructor parameter types from legacy decorator metadata.
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true,
     "skipLibCheck": true,
     "types": ["node"]
   },

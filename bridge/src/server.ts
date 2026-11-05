@@ -1,3 +1,5 @@
+// Must load before anything imports tsyringe, which needs the Reflect metadata API.
+import "reflect-metadata";
 import { createServer } from "node:http";
 import { join } from "node:path";
 import { createApp } from "./app.js";
