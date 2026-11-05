@@ -16,6 +16,7 @@ re-signed.
 | `app-user-notification-issue-subscribed.json` | `AppUserNotification` / `issueSubscribed` | Sent with the delegation |
 | `app-user-notification-issue-comment-mention.json` | `AppUserNotification` / `issueCommentMention` | Sent with the mention |
 | `app-user-notification-issue-unassigned-from-you.json` | `AppUserNotification` / `issueUnassignedFromYou` | Issue un-delegated |
+| `oauth-app-revoked.json` | `OAuthApp` / `revoked` | Coder revoked from the OAuth app's manage page during [AGE-16](https://linear.app/scriptorium/issue/AGE-16) |
 
 ## Format
 
@@ -62,6 +63,10 @@ and don't parse it and re-serialise it first. Only the headers Linear sets are k
 - **Un-delegating and delegating again creates a new session.** The first
   session's `created` was followed by `issueUnassignedFromYou`, and a later
   delegation of the same issue produced a second session id.
+- **A revoke is an `OAuthApp` event** with `action: "revoked"`, the
+  `organizationId` and the app's `oauthClientId` (zeroed in the fixture). It
+  carries no user or token. Linear sent it for only one of three revokes in
+  AGE-16, so it can't be the only revoke signal.
 - **Notifications arrive alongside session events**, under a separate
   `Linear-Event: AppUserNotification`. The bridge must accept and ignore them.
 - **Install path (input for P0-4).** The `actor=app` authorize URL with scopes

@@ -1,7 +1,7 @@
 // The only module that reads ROLE or knows where role profiles live. Everything
 // else gets the loaded profile and credentials from loadConfig().
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { PermissionMode } from "@anthropic-ai/claude-agent-sdk";
 import { parse as parseYaml } from "yaml";
@@ -42,6 +42,8 @@ export type RoleProfile = z.infer<typeof roleProfileSchema> & {
 
 export interface Config {
   port: number;
+  // The data volume: Linear tokens and Claude transcripts.
+  dataDir: string;
   role: RoleProfile;
   claude: { oauthToken: string };
   linear: {
@@ -112,6 +114,9 @@ export function loadConfig(env: Env, rolesDir = DEFAULT_ROLES_DIR): Config {
     problems.push("PORT must be an integer from 1 to 65535.");
   }
 
+  const dataDir = env.DATA_DIR || "/data";
+  if (!isAbsolute(dataDir)) problems.push("DATA_DIR must be an absolute path.");
+
   // A missing ROLE is already reported with the other required variables.
   const role = env.ROLE ? loadRole(env.ROLE, rolesDir, problems) : undefined;
 
@@ -119,6 +124,7 @@ export function loadConfig(env: Env, rolesDir = DEFAULT_ROLES_DIR): Config {
 
   return {
     port,
+    dataDir,
     role: role!,
     claude: { oauthToken: env.CLAUDE_CODE_OAUTH_TOKEN! },
     linear: {
