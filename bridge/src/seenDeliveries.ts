@@ -1,5 +1,5 @@
-// The Linear-Delivery ids the bridge has accepted, so a delivery Linear sends again
-// is acknowledged but not acted on twice (FR-203). Held in memory: a restart forgets
+// The Linear-Delivery ids and signatures the bridge has accepted, so a delivery Linear
+// sends again is acknowledged but not acted on twice (FR-203). Held in memory: a restart forgets
 // them, which at worst lets one retry through.
 import { inject, injectable } from "tsyringe";
 import { CLOCK } from "./tokens.js";
@@ -7,7 +7,8 @@ import { CLOCK } from "./tokens.js";
 // Linear can retry a delivery hours after the first attempt, long after the 60 s
 // freshness window, so ids are kept for a day.
 const KEEP_MS = 24 * 60 * 60 * 1000;
-// Far more than a day of deliveries for one bot; it only bounds memory.
+// Two keys per delivery, so 5,000 deliveries: far more than a day's for one bot. It
+// only bounds memory.
 const MAX_IDS = 10_000;
 
 @injectable()

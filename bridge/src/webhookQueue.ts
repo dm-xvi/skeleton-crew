@@ -38,10 +38,11 @@ export class WebhookQueue {
 
   // Never rejects: a rejection here would stop the queue, and an unhandled one
   // stops the bridge.
-  async #run({ delivery, payload }: WebhookEvent): Promise<void> {
+  async #run(event: WebhookEvent): Promise<void> {
     try {
-      await this.handler.handle({ delivery, payload });
+      await this.handler.handle(event);
     } catch (err) {
+      const { delivery, payload } = event;
       this.logger.error(
         { err, delivery, type: payload.type, action: payload.action },
         "handling a webhook failed",

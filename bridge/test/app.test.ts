@@ -305,11 +305,12 @@ describe("POST /webhooks/linear", () => {
     const revoked = fixture("oauth-app-revoked");
     deliveredAfter(revoked, 500);
     for (const contentType of ["application/json", "text/plain", "application/octet-stream"]) {
-      // A new delivery id each time, or the second and third are duplicates.
-      const headers = { ...revoked.headers, "content-type": contentType, "linear-delivery": contentType };
+      // A 200, not a 401: the body was read as sent. The second and third are
+      // duplicates, which are checked after the signature.
+      const headers = { ...revoked.headers, "content-type": contentType };
       expect((await postWebhook(revoked.body, headers)).status).toBe(200);
     }
-    expect(handled).toHaveLength(3);
+    expect(handled).toHaveLength(1);
     expect(existsSync(tokenFile)).toBe(false);
   });
 
@@ -318,6 +319,7 @@ describe("POST /webhooks/linear", () => {
     expect(res.status).toBe(413);
     expect(res.headers.get("content-type")).toBeNull();
     expect(await res.text()).toBe("");
+    await vi.waitFor(() => expect(answers()).toEqual([expect.objectContaining({ status: 413 })]));
   });
 
   test("a body of exactly 1 MB is read and checked", async () => {
@@ -360,6 +362,10 @@ describe("POST /webhooks/linear", () => {
     await rawRequest("POST /webhooks/linear HTTP/1.1\r\nHost: bridge\r\nContent-Length: 10\r\n\r\nabc", 50);
     await vi.waitFor(() => expect(logLines.join("")).toMatch(/"level":40,.*"msg":"bad request"/));
     expect(logLines.join("")).not.toMatch(/"msg":"request failed"/);
+    // Logged although no answer reached the client, and not as a 200.
+    await vi.waitFor(() => expect(answers()).toHaveLength(1));
+    expect(answers()[0]).toMatchObject({ finished: false });
+    expect(answers()[0]!.status).not.toBe(200);
   });
 
   test("a compressed body is not decompressed and gets an empty 401", async () => {
@@ -380,7 +386,7 @@ describe("POST /webhooks/linear", () => {
 });
 
 // The "answered a webhook" lines, parsed.
-function answers(): { delivery?: string; event?: string; status: number; ackMs: number }[] {
+function answers(): { delivery?: string; event?: string; status?: number; finished: boolean; ackMs: number }[] {
   return logLines.map((line) => JSON.parse(line)).filter((entry) => entry.msg === "answered a webhook");
 }
 
@@ -424,6 +430,16 @@ describe("de-duplicating deliveries", () => {
     deliveredAfter(f, 400);
     const [a, b] = await Promise.all([postWebhook(f.body, f.headers), postWebhook(f.body, f.headers)]);
     expect([a.status, b.status]).toEqual([200, 200]);
+    expect(handled).toHaveLength(1);
+  });
+
+  // The delivery id isn't signed, so a copy of a signed request with a new id is
+  // still a duplicate.
+  test("a signed request replayed with a new delivery id is not queued again", async () => {
+    const f = fixture("agent-session-prompted");
+    deliveredAfter(f, 400);
+    expect((await postWebhook(f.body, f.headers)).status).toBe(200);
+    expect((await postWebhook(f.body, { ...f.headers, "linear-delivery": "replayed" })).status).toBe(200);
     expect(handled).toHaveLength(1);
   });
 

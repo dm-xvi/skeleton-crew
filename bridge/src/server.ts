@@ -6,6 +6,7 @@ import { ConfigError, loadConfig, type Config } from "./config.js";
 import { buildContainer } from "./container.js";
 import { logger } from "./logger.js";
 import { TokenStore } from "./tokenStore.js";
+import { WebhookQueue } from "./webhookQueue.js";
 
 // Crashes go through the logger too, so every line on stdout stays JSON.
 // Unhandled promise rejections arrive here as well.
@@ -47,9 +48,15 @@ server.listen(port, "0.0.0.0", () => {
 });
 
 // tini forwards stop signals, so `docker compose down` closes the server cleanly.
+// Linear already has its 200 for everything queued, and won't send it again, so the
+// queue is drained before the bridge exits.
+const queue = c.resolve(WebhookQueue);
 for (const signal of ["SIGTERM", "SIGINT"] as const) {
   process.on(signal, () => {
     logger.info({ signal }, "shutting down");
-    server.close(() => process.exit(0));
+    server.close(async () => {
+      await queue.idle();
+      process.exit(0);
+    });
   });
 }

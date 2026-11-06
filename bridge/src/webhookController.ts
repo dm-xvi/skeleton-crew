@@ -31,14 +31,22 @@ export class WebhookController {
   }
 
   // Runs before the body is read, so the logged ack time includes reading it. Every
-  // answer is logged, the 401s and 413s too.
+  // request is logged, the 401s and 413s too. On "close", not "finish", which never
+  // fires when the connection drops first; `finished` says whether the answer got out.
   timed: RequestHandler = (req, res, next) => {
     const start = performance.now();
-    res.on("finish", () => {
+    res.on("close", () => {
       // performance.now(), not Date: tests fake Date to match the fixtures.
       const ackMs = Math.round(performance.now() - start);
       this.logger.info(
-        { delivery: req.headers["linear-delivery"], event: req.headers["linear-event"], status: res.statusCode, ackMs },
+        {
+          delivery: req.headers["linear-delivery"],
+          event: req.headers["linear-event"],
+          // Until headers go out, statusCode is Node's default 200, not an answer.
+          status: res.headersSent ? res.statusCode : undefined,
+          finished: res.writableFinished,
+          ackMs,
+        },
         "answered a webhook",
       );
     });
@@ -55,29 +63,33 @@ export class WebhookController {
       return;
     }
     const body: Buffer = req.body;
-    const signature = req.headers[LINEAR_WEBHOOK_SIGNATURE_HEADER];
+    const header = req.headers[LINEAR_WEBHOOK_SIGNATURE_HEADER];
+    const signature = typeof header === "string" ? header : "";
     let payload: LinearWebhookPayload;
     try {
       // Throws on a bad signature or a stale timestamp; never returns false.
-      payload = this.#webhooks.parseData(body, typeof signature === "string" ? signature : "");
+      payload = this.#webhooks.parseData(body, signature);
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
       this.#reject(req, res, reason);
       return;
     }
-    // Only now: the signature doesn't cover this header, so a forged request must not
-    // get a real delivery id marked as seen.
-    const header = req.headers["linear-delivery"];
-    const delivery = typeof header === "string" && header !== "" ? header : undefined;
+    // Only now: a forged request must not get a real delivery id marked as seen.
+    const deliveryHeader = req.headers["linear-delivery"];
+    const delivery = typeof deliveryHeader === "string" && deliveryHeader !== "" ? deliveryHeader : undefined;
     if (delivery === undefined) {
       this.logger.warn({ type: payload.type, action: payload.action }, "a signed webhook has no Linear-Delivery id");
-    } else if (!this.seen.firstTime(delivery)) {
-      this.logger.info({ delivery, type: payload.type, action: payload.action }, "ignored a duplicate webhook");
-      empty(res, 200);
-      return;
     }
+    // The signature is checked too: the delivery id isn't signed, so a copy of a signed
+    // request replayed with a new id would otherwise pass. Both are recorded either way.
+    const firstSignature = this.seen.firstTime(`signature:${signature}`);
+    const firstDelivery = delivery === undefined || this.seen.firstTime(`delivery:${delivery}`);
     empty(res, 200);
-    this.queue.push({ delivery, payload });
+    if (firstSignature && firstDelivery) {
+      this.queue.push({ delivery, payload });
+    } else {
+      this.logger.info({ delivery, type: payload.type, action: payload.action }, "ignored a duplicate webhook");
+    }
   };
 
   #reject(req: Request, res: Response, reason: string): void {
