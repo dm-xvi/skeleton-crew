@@ -1,8 +1,9 @@
+// Must load before anything imports tsyringe, which needs the Reflect metadata API.
+import "reflect-metadata";
 import { createServer } from "node:http";
-import { join } from "node:path";
 import { createApp } from "./app.js";
 import { ConfigError, loadConfig, type Config } from "./config.js";
-import { LinearOAuth } from "./linearOAuth.js";
+import { buildContainer } from "./container.js";
 import { logger } from "./logger.js";
 import { TokenStore } from "./tokenStore.js";
 
@@ -27,20 +28,18 @@ try {
 const { port } = config;
 logger.info({ role: config.role.name }, "loaded role");
 
-const oauth = new LinearOAuth({
-  clientId: config.linear.clientId,
-  clientSecret: config.linear.clientSecret,
-  redirectUri: `${config.linear.publicUrl}/oauth/callback`,
-});
-const tokens = new TokenStore({ file: join(config.dataDir, "linear", "tokens.json"), oauth, logger });
-const installation = await tokens.installation();
+// createApp resolves every controller, and with them every service, before the
+// bridge listens: a broken registration stops it at startup.
+const c = buildContainer(config, logger);
+const app = createApp(c);
+const installation = await c.resolve(TokenStore).installation();
 if (installation) {
   logger.info({ appUserId: installation.appUserId }, "found the Linear install");
 } else {
   logger.warn(`not installed in Linear yet; visit ${config.linear.publicUrl}/oauth/install`);
 }
 
-const server = createServer(createApp({ config, oauth, tokens, logger }));
+const server = createServer(app);
 
 // Listen on every interface: the tunnel reaches the bridge over the Compose network.
 server.listen(port, "0.0.0.0", () => {

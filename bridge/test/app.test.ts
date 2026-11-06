@@ -1,19 +1,20 @@
 import { createHmac } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { createServer, type Server } from "node:http";
-import type { AddressInfo } from "node:net";
+import { createServer, request, type Server } from "node:http";
+import { connect, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { pino } from "pino";
+import type { DependencyContainer } from "tsyringe";
 import { afterAll, afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { createApp } from "../src/app.js";
-import { loadConfig } from "../src/config.js";
-import { LinearOAuth } from "../src/linearOAuth.js";
-import { TokenStore } from "../src/tokenStore.js";
+import { buildContainer } from "../src/container.js";
+import { NotInstalledError, TokenStore } from "../src/tokenStore.js";
+import { CLOCK, FETCH } from "../src/tokens.js";
 import { APP_USER_ID, fakeLinear, type FakeLinear } from "./fakeLinear.js";
+import { captureLogs } from "./logs.js";
+import { testConfig } from "./testConfig.js";
 
-const repoRolesDir = fileURLToPath(new URL("../../roles/", import.meta.url));
 const fixturesDir = fileURLToPath(new URL("../../test/fixtures/linear/webhooks/", import.meta.url));
 
 // The fixtures are signed with this secret, and scrub.mjs zeroes oauthClientId.
@@ -32,6 +33,7 @@ function fixture(name: string): Fixture {
 const tempDirs: string[] = [];
 afterAll(() => tempDirs.forEach((dir) => rmSync(dir, { recursive: true, force: true })));
 
+let c: DependencyContainer;
 let server: Server;
 let base: string;
 let linear: FakeLinear;
@@ -42,31 +44,20 @@ let clock: number;
 beforeEach(async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "data-"));
   tempDirs.push(dataDir);
-  const config = loadConfig(
-    {
-      ROLE: "coder",
-      CLAUDE_CODE_OAUTH_TOKEN: "secret-oauth-token",
-      LINEAR_CLIENT_ID: CLIENT_ID,
-      LINEAR_CLIENT_SECRET: "secret-client-secret",
-      LINEAR_WEBHOOK_SECRET: FIXTURE_WEBHOOK_SECRET,
-      PUBLIC_URL: "https://coder.example.com",
-      DATA_DIR: dataDir,
-    },
-    repoRolesDir,
-  );
-  linear = fakeLinear();
-  logLines = [];
-  clock = Date.parse("2026-11-04T12:00:00.000Z");
-  const logger = pino({ level: "trace" }, { write: (line: string) => void logLines.push(line) });
-  const oauth = new LinearOAuth({
-    clientId: config.linear.clientId,
-    clientSecret: config.linear.clientSecret,
-    redirectUri: `${config.linear.publicUrl}/oauth/callback`,
-    fetch: linear.fetch,
+  const config = testConfig(dataDir, {
+    LINEAR_CLIENT_ID: CLIENT_ID,
+    LINEAR_WEBHOOK_SECRET: FIXTURE_WEBHOOK_SECRET,
   });
+  linear = fakeLinear();
+  clock = Date.parse("2026-11-04T12:00:00.000Z");
+  const { logger, lines } = captureLogs();
+  logLines = lines;
   tokenFile = join(dataDir, "linear", "tokens.json");
-  const tokens = new TokenStore({ file: tokenFile, oauth, logger, now: () => clock });
-  server = createServer(createApp({ config, oauth, tokens, logger, now: () => clock }));
+  // A fresh container per test, with only Linear and the clock swapped.
+  c = buildContainer(config, logger);
+  c.registerInstance(FETCH, linear.fetch);
+  c.registerInstance(CLOCK, () => clock);
+  server = createServer(createApp(c));
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 });
@@ -90,6 +81,23 @@ async function installed(): Promise<void> {
 
 function postWebhook(body: string, headers: Record<string, string>): Promise<Response> {
   return fetch(`${base}/webhooks/linear`, { method: "POST", headers, body });
+}
+
+// Writes `head` on a bare socket and returns what came back within `ms`, for requests
+// fetch cannot send: a body shorter than its Content-Length, or one never finished.
+function rawRequest(head: string, ms = 1000): Promise<string> {
+  return new Promise((resolve) => {
+    const socket = connect((server.address() as AddressInfo).port, "127.0.0.1", () => socket.write(head));
+    let reply = "";
+    socket.on("data", (data) => (reply += data));
+    socket.on("error", () => {});
+    const done = (): void => {
+      socket.destroy();
+      resolve(reply);
+    };
+    socket.on("close", done);
+    setTimeout(done, ms);
+  });
 }
 
 // The SDK checks webhookTimestamp against Date.now(), and the fixtures are from
@@ -252,9 +260,146 @@ describe("POST /webhooks/linear", () => {
     expect((await postWebhook(body, headers)).status).toBe(200);
     expect(existsSync(tokenFile)).toBe(true);
   });
+
+  // The webhook clears the controller's TokenStore. Only if that is the app's one
+  // TokenStore does the revoke stop a refresh another consumer has in flight.
+  test("a revoke stops a refresh in flight elsewhere in the app from writing back", async () => {
+    await installed();
+    clock += 25 * 60 * 60 * 1000;
+    let release!: () => void;
+    linear.tokenGate = new Promise((resolve) => (release = resolve));
+    const pending = c.resolve(TokenStore).accessToken();
+    await vi.waitFor(() => expect(linear.tokenRequests).toHaveLength(2));
+    const revoked = fixture("oauth-app-revoked");
+    deliveredAfter(revoked, 500);
+    expect((await postWebhook(revoked.body, revoked.headers)).status).toBe(200);
+    release();
+    await expect(pending).rejects.toBeInstanceOf(NotInstalledError);
+    expect(existsSync(tokenFile)).toBe(false);
+  });
+
+  test("a signed body verifies whatever its content type", async () => {
+    await installed();
+    const revoked = fixture("oauth-app-revoked");
+    deliveredAfter(revoked, 500);
+    for (const contentType of ["application/json", "text/plain", "application/octet-stream"]) {
+      const res = await postWebhook(revoked.body, { ...revoked.headers, "content-type": contentType });
+      expect(res.status).toBe(200);
+    }
+    expect(existsSync(tokenFile)).toBe(false);
+  });
+
+  test("a body over 1 MB gets an empty 413", async () => {
+    const res = await fetch(`${base}/webhooks/linear`, { method: "POST", body: Buffer.alloc(1024 * 1024 + 1) });
+    expect(res.status).toBe(413);
+    expect(res.headers.get("content-type")).toBeNull();
+    expect(await res.text()).toBe("");
+  });
+
+  test("a body of exactly 1 MB is read and checked", async () => {
+    const res = await fetch(`${base}/webhooks/linear`, { method: "POST", body: Buffer.alloc(1024 * 1024) });
+    expect(res.status).toBe(401);
+  });
+
+  test("a declared length over 1 MB gets its 413 before the body arrives", async () => {
+    const reply = await rawRequest(
+      "POST /webhooks/linear HTTP/1.1\r\nHost: bridge\r\nContent-Length: 5000000\r\n\r\nabc",
+    );
+    expect(reply).toMatch(/^HTTP\/1\.1 413 /);
+    expect(reply).toMatch(/\r\nconnection: close\r\n/i);
+  });
+
+  test("a chunked body is cut off once it passes 1 MB, not read to the end", async () => {
+    const { status, sent } = await new Promise<{ status: number | "reset"; sent: number }>((resolve) => {
+      let sent = 0;
+      const req = request(`${base}/webhooks/linear`, { method: "POST" }, (res) =>
+        resolve({ status: res.statusCode!, sent }),
+      );
+      // The bridge answers 413 and closes the connection mid-upload, so the client's
+      // next write can fail before it has read the 413.
+      req.on("error", () => resolve({ status: "reset", sent }));
+      const chunk = Buffer.alloc(64 * 1024);
+      const pump = (): void => {
+        while (sent < 64 * 1024 * 1024) {
+          sent += chunk.length;
+          if (!req.write(chunk)) return void req.once("drain", pump);
+        }
+        req.end();
+      };
+      pump();
+    });
+    expect([413, "reset"]).toContain(status);
+    expect(sent).toBeLessThan(16 * 1024 * 1024);
+  });
+
+  test("an aborted upload is logged as the client's fault, not a failure", async () => {
+    await rawRequest("POST /webhooks/linear HTTP/1.1\r\nHost: bridge\r\nContent-Length: 10\r\n\r\nabc", 50);
+    await vi.waitFor(() => expect(logLines.join("")).toMatch(/"level":40,.*"msg":"bad request"/));
+    expect(logLines.join("")).not.toMatch(/"msg":"request failed"/);
+  });
+
+  test("a compressed body is not decompressed and gets an empty 401", async () => {
+    await installed();
+    const { headers, body } = fixture("oauth-app-revoked");
+    deliveredAfter({ headers, body }, 500);
+    const res = await postWebhook(body, { ...headers, "content-encoding": "gzip" });
+    expect(res.status).toBe(401);
+    expect(await res.text()).toBe("");
+    expect(existsSync(tokenFile)).toBe(true);
+  });
+
+  test("a request with no body gets an empty 401", async () => {
+    const res = await fetch(`${base}/webhooks/linear`, { method: "POST" });
+    expect(res.status).toBe(401);
+    expect(await res.text()).toBe("");
+  });
 });
 
 test("GET /healthz still answers", async () => {
   const res = await fetch(`${base}/healthz`);
   expect(res.status).toBe(200);
+});
+
+describe("the OAuth install across requests", () => {
+  test("an install link from /oauth/install is accepted at /oauth/callback", async () => {
+    const first = (await startInstall()).searchParams.get("state")!;
+    const second = (await startInstall()).searchParams.get("state")!;
+    expect((await callback({ code: "secret-code", state: first })).status).toBe(200);
+    expect((await callback({ code: "secret-code", state: second })).status).toBe(200);
+  });
+});
+
+describe("routing", () => {
+  test.each([
+    ["GET", "/nope"],
+    ["POST", "/healthz"],
+    ["GET", "/webhooks/linear"],
+    ["GET", "/HEALTHZ"],
+    ["GET", "/healthz/"],
+    ["HEAD", "/healthz"],
+    ["HEAD", "/oauth/install"],
+    ["OPTIONS", "/healthz"],
+  ])("%s %s gets an empty 404", async (method, path) => {
+    const res = await fetch(`${base}${path}`, { method, redirect: "manual" });
+    expect(res.status).toBe(404);
+    expect(res.headers.get("content-type")).toBeNull();
+    expect(await res.text()).toBe("");
+  });
+
+  test("an unexpected error gets the plain-text 500", async () => {
+    linear.viewerIsApp = false;
+    const state = (await startInstall()).searchParams.get("state")!;
+    const res = await callback({ code: "secret-code", state });
+    expect(res.status).toBe(500);
+    expect(res.headers.get("content-type")).toBe("text/plain; charset=utf-8");
+    expect(await res.text()).toBe("Something went wrong. The bridge log has the details.\n");
+    expect(logLines.join("")).toMatch(/"route":"GET \/oauth\/callback".*"msg":"request failed"/);
+  });
+
+  test("adds no Express headers", async () => {
+    const res = await fetch(`${base}/healthz`);
+    expect(res.headers.get("x-powered-by")).toBeNull();
+    expect(res.headers.get("etag")).toBeNull();
+    expect(await res.text()).toBe("ok\n");
+  });
 });
