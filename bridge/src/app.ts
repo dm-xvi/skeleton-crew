@@ -2,7 +2,7 @@
 // maps URLs to them, so tests can drive it with a fake Linear.
 import express, { type ErrorRequestHandler, type Express } from "express";
 import type { DependencyContainer } from "tsyringe";
-import { empty, text } from "./http.js";
+import { empty, rawBody, text } from "./http.js";
 import { OAuthController } from "./oauthController.js";
 import { LOGGER } from "./tokens.js";
 import { WebhookController } from "./webhookController.js";
@@ -30,19 +30,23 @@ export function createApp(c: DependencyContainer): Express {
   app.get("/oauth/install", oauth.install);
   app.get("/oauth/callback", oauth.callback);
   // Raw bytes on this route only: the signature covers the body exactly as sent.
-  // Any content type is read, and nothing is decompressed.
-  app.post(
-    "/webhooks/linear",
-    express.raw({ type: () => true, limit: MAX_BODY_BYTES, inflate: false }),
-    webhooks.receive,
-    webhooks.unreadableBody,
-  );
+  // Any content type is read.
+  app.post("/webhooks/linear", rawBody(MAX_BODY_BYTES), webhooks.receive);
   // Express's own 404 is an HTML page; the bridge's is empty.
   app.use((_req, res) => empty(res, 404));
 
   const onError: ErrorRequestHandler = (err, req, res, _next) => {
+    const route = `${req.method} ${req.path}`;
+    // The client's own fault, such as an upload it aborted: http-errors marks these
+    // safe to expose. Linear's errors carry Linear's status but never this flag.
+    if (err?.expose === true && err.status >= 400 && err.status < 500) {
+      logger.warn({ route, reason: err.message }, "bad request");
+      if (!res.headersSent) empty(res, err.status);
+      else res.end();
+      return;
+    }
     // Errors from Linear calls carry a status and an error code, never a token.
-    logger.error({ err, route: `${req.method} ${req.path}` }, "request failed");
+    logger.error({ err, route }, "request failed");
     if (!res.headersSent) text(res, 500, "Something went wrong. The bridge log has the details.");
     else res.end();
   };

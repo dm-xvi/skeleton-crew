@@ -27,12 +27,12 @@ export function buildContainer(config: Config, logger: Logger): DependencyContai
   // factories are created here, per container, so the cache is too.
   c.register(LinearOAuth, {
     useFactory: instanceCachingFactory(
-      (c) =>
+      (dc) =>
         new LinearOAuth({
           clientId: config.linear.clientId,
           clientSecret: config.linear.clientSecret,
           redirectUri: `${config.linear.publicUrl}/oauth/callback`,
-          fetch: c.resolve(FETCH),
+          fetch: dc.resolve(FETCH),
         }),
     ),
   });
@@ -40,12 +40,12 @@ export function buildContainer(config: Config, logger: Logger): DependencyContai
   // caller shares the one instance.
   c.register(TokenStore, {
     useFactory: instanceCachingFactory(
-      (c) =>
+      (dc) =>
         new TokenStore({
           file: join(config.dataDir, "linear", "tokens.json"),
-          oauth: c.resolve(LinearOAuth),
-          logger: c.resolve(LOGGER),
-          now: c.resolve(CLOCK),
+          oauth: dc.resolve(LinearOAuth),
+          logger: dc.resolve(LOGGER),
+          now: dc.resolve(CLOCK),
         }),
     ),
   });

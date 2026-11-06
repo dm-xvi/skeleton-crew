@@ -4,7 +4,8 @@ import { loadConfig, type Config } from "../src/config.js";
 
 const repoRolesDir = fileURLToPath(new URL("../../roles/", import.meta.url));
 
-export function testConfig(dataDir: string): Config {
+// `env` replaces any of the variables below.
+export function testConfig(dataDir: string, env: Record<string, string> = {}): Config {
   return loadConfig(
     {
       ROLE: "coder",
@@ -14,6 +15,7 @@ export function testConfig(dataDir: string): Config {
       LINEAR_WEBHOOK_SECRET: "secret-webhook-secret",
       PUBLIC_URL: "https://coder.example.com",
       DATA_DIR: dataDir,
+      ...env,
     },
     repoRolesDir,
   );

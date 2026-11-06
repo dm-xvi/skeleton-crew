@@ -1,21 +1,20 @@
 import { createHmac } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { createServer, type Server } from "node:http";
-import type { AddressInfo } from "node:net";
+import { createServer, request, type Server } from "node:http";
+import { connect, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { DependencyContainer } from "tsyringe";
 import { afterAll, afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { createApp } from "../src/app.js";
-import { loadConfig } from "../src/config.js";
 import { buildContainer } from "../src/container.js";
 import { NotInstalledError, TokenStore } from "../src/tokenStore.js";
 import { CLOCK, FETCH } from "../src/tokens.js";
 import { APP_USER_ID, fakeLinear, type FakeLinear } from "./fakeLinear.js";
 import { captureLogs } from "./logs.js";
+import { testConfig } from "./testConfig.js";
 
-const repoRolesDir = fileURLToPath(new URL("../../roles/", import.meta.url));
 const fixturesDir = fileURLToPath(new URL("../../test/fixtures/linear/webhooks/", import.meta.url));
 
 // The fixtures are signed with this secret, and scrub.mjs zeroes oauthClientId.
@@ -45,18 +44,10 @@ let clock: number;
 beforeEach(async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "data-"));
   tempDirs.push(dataDir);
-  const config = loadConfig(
-    {
-      ROLE: "coder",
-      CLAUDE_CODE_OAUTH_TOKEN: "secret-oauth-token",
-      LINEAR_CLIENT_ID: CLIENT_ID,
-      LINEAR_CLIENT_SECRET: "secret-client-secret",
-      LINEAR_WEBHOOK_SECRET: FIXTURE_WEBHOOK_SECRET,
-      PUBLIC_URL: "https://coder.example.com",
-      DATA_DIR: dataDir,
-    },
-    repoRolesDir,
-  );
+  const config = testConfig(dataDir, {
+    LINEAR_CLIENT_ID: CLIENT_ID,
+    LINEAR_WEBHOOK_SECRET: FIXTURE_WEBHOOK_SECRET,
+  });
   linear = fakeLinear();
   clock = Date.parse("2026-11-04T12:00:00.000Z");
   const { logger, lines } = captureLogs();
@@ -90,6 +81,23 @@ async function installed(): Promise<void> {
 
 function postWebhook(body: string, headers: Record<string, string>): Promise<Response> {
   return fetch(`${base}/webhooks/linear`, { method: "POST", headers, body });
+}
+
+// Writes `head` on a bare socket and returns what came back within `ms`, for requests
+// fetch cannot send: a body shorter than its Content-Length, or one never finished.
+function rawRequest(head: string, ms = 1000): Promise<string> {
+  return new Promise((resolve) => {
+    const socket = connect((server.address() as AddressInfo).port, "127.0.0.1", () => socket.write(head));
+    let reply = "";
+    socket.on("data", (data) => (reply += data));
+    socket.on("error", () => {});
+    const done = (): void => {
+      socket.destroy();
+      resolve(reply);
+    };
+    socket.on("close", done);
+    setTimeout(done, ms);
+  });
 }
 
 // The SDK checks webhookTimestamp against Date.now(), and the fixtures are from
@@ -291,6 +299,43 @@ describe("POST /webhooks/linear", () => {
   test("a body of exactly 1 MB is read and checked", async () => {
     const res = await fetch(`${base}/webhooks/linear`, { method: "POST", body: Buffer.alloc(1024 * 1024) });
     expect(res.status).toBe(401);
+  });
+
+  test("a declared length over 1 MB gets its 413 before the body arrives", async () => {
+    const reply = await rawRequest(
+      "POST /webhooks/linear HTTP/1.1\r\nHost: bridge\r\nContent-Length: 5000000\r\n\r\nabc",
+    );
+    expect(reply).toMatch(/^HTTP\/1\.1 413 /);
+    expect(reply).toMatch(/\r\nconnection: close\r\n/i);
+  });
+
+  test("a chunked body is cut off once it passes 1 MB, not read to the end", async () => {
+    const { status, sent } = await new Promise<{ status: number | "reset"; sent: number }>((resolve) => {
+      let sent = 0;
+      const req = request(`${base}/webhooks/linear`, { method: "POST" }, (res) =>
+        resolve({ status: res.statusCode!, sent }),
+      );
+      // The bridge answers 413 and closes the connection mid-upload, so the client's
+      // next write can fail before it has read the 413.
+      req.on("error", () => resolve({ status: "reset", sent }));
+      const chunk = Buffer.alloc(64 * 1024);
+      const pump = (): void => {
+        while (sent < 64 * 1024 * 1024) {
+          sent += chunk.length;
+          if (!req.write(chunk)) return void req.once("drain", pump);
+        }
+        req.end();
+      };
+      pump();
+    });
+    expect([413, "reset"]).toContain(status);
+    expect(sent).toBeLessThan(16 * 1024 * 1024);
+  });
+
+  test("an aborted upload is logged as the client's fault, not a failure", async () => {
+    await rawRequest("POST /webhooks/linear HTTP/1.1\r\nHost: bridge\r\nContent-Length: 10\r\n\r\nabc", 50);
+    await vi.waitFor(() => expect(logLines.join("")).toMatch(/"level":40,.*"msg":"bad request"/));
+    expect(logLines.join("")).not.toMatch(/"msg":"request failed"/);
   });
 
   test("a compressed body is not decompressed and gets an empty 401", async () => {

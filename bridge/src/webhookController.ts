@@ -1,6 +1,6 @@
 // Linear's webhooks: verified over the raw body, then acted on. AGE-20 adds
 // de-duplication and the queue.
-import type { ErrorRequestHandler, Request, Response } from "express";
+import type { Request, Response } from "express";
 import {
   LINEAR_WEBHOOK_SIGNATURE_HEADER,
   LinearWebhookClient,
@@ -17,24 +17,28 @@ import { CONFIG, LOGGER } from "./tokens.js";
 
 @injectable()
 export class WebhookController {
-  readonly #config: Config;
-  readonly #tokens: TokenStore;
-  readonly #logger: Logger;
   // Checks the HMAC over the raw body and that the signed webhookTimestamp is within
   // 60 s of now (FR-201, FR-202).
   readonly #webhooks: LinearWebhookClient;
 
-  constructor(@inject(CONFIG) config: Config, tokens: TokenStore, @inject(LOGGER) logger: Logger) {
-    this.#config = config;
-    this.#tokens = tokens;
-    this.#logger = logger;
+  constructor(
+    @inject(CONFIG) private readonly config: Config,
+    private readonly tokens: TokenStore,
+    @inject(LOGGER) private readonly logger: Logger,
+  ) {
     this.#webhooks = new LinearWebhookClient(config.linear.webhookSecret);
   }
 
-  // The route's express.raw() leaves req.body as the bytes Linear sent, which the
-  // HMAC covers. A request with no body leaves it undefined, and fails the check.
+  // The route's rawBody() leaves req.body as the bytes Linear sent, which the HMAC
+  // covers. A request with no body has zero bytes, and fails the check.
   receive = async (req: Request, res: Response): Promise<void> => {
-    const body: Buffer = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+    // Nothing is decompressed, so a body labelled compressed is not what Linear signed.
+    const encoding = (req.headers["content-encoding"] ?? "identity").toLowerCase();
+    if (encoding !== "identity") {
+      this.#reject(req, res, `unsupported content encoding ${encoding}`);
+      return;
+    }
+    const body: Buffer = req.body;
     const signature = req.headers[LINEAR_WEBHOOK_SIGNATURE_HEADER];
     let payload: LinearWebhookPayload;
     try {
@@ -47,31 +51,18 @@ export class WebhookController {
     }
     // The SDK types `type` as a plain string, so the union does not narrow on it.
     if (payload.type === "OAuthApp" && payload.action === "revoked") {
-      if ((payload as OAuthAppWebhookPayload).oauthClientId === this.#config.linear.clientId) {
-        await this.#tokens.clear("Linear sent an OAuthApp revoked webhook");
+      if ((payload as OAuthAppWebhookPayload).oauthClientId === this.config.linear.clientId) {
+        await this.tokens.clear("Linear sent an OAuthApp revoked webhook");
       } else {
-        this.#logger.warn("ignoring an OAuthApp revoked webhook for another client");
+        this.logger.warn("ignoring an OAuthApp revoked webhook for another client");
       }
     }
     // Agent session events and notifications are acknowledged and dropped until AGE-20.
     empty(res, 200);
   };
 
-  // For errors from the route's body parser.
-  unreadableBody: ErrorRequestHandler = (err, req, res, next) => {
-    if (err?.type === "entity.too.large") {
-      empty(res, 413);
-    } else if (err?.type === "encoding.unsupported") {
-      // The parser never decompresses, so the HMAC would run over compressed bytes
-      // and fail. Answer as that failed check would.
-      this.#reject(req, res, `unsupported content encoding ${err.encoding}`);
-    } else {
-      next(err);
-    }
-  };
-
   #reject(req: Request, res: Response, reason: string): void {
-    this.#logger.warn({ delivery: req.headers["linear-delivery"], reason }, "rejected a webhook");
+    this.logger.warn({ delivery: req.headers["linear-delivery"], reason }, "rejected a webhook");
     empty(res, 401);
   }
 }

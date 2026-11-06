@@ -28,8 +28,8 @@ let clock: number;
 let logLines: string[];
 
 function store(): TokenStore {
-  const { logger, lines } = captureLogs();
-  logLines = lines;
+  // Every store in a test logs to the one logLines.
+  const { logger } = captureLogs(logLines);
   if (build === "built by the container") {
     const c = buildContainer(testConfig(dataDir), logger);
     c.registerInstance(FETCH, linear.fetch);
