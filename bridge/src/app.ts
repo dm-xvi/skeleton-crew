@@ -31,7 +31,7 @@ export function createApp(c: DependencyContainer): Express {
   app.get("/oauth/callback", oauth.callback);
   // Raw bytes on this route only: the signature covers the body exactly as sent.
   // Any content type is read.
-  app.post("/webhooks/linear", rawBody(MAX_BODY_BYTES), webhooks.receive);
+  app.post("/webhooks/linear", webhooks.timed, rawBody(MAX_BODY_BYTES), webhooks.receive);
   // Express's own 404 is an HTML page; the bridge's is empty.
   app.use((_req, res) => empty(res, 404));
 

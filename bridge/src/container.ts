@@ -5,11 +5,14 @@ import { join } from "node:path";
 import type { Logger } from "pino";
 import { container as root, instanceCachingFactory, type DependencyContainer } from "tsyringe";
 import type { Config } from "./config.js";
+import { LinearEvents } from "./linearEvents.js";
 import { LinearOAuth } from "./linearOAuth.js";
 import { OAuthController } from "./oauthController.js";
+import { SeenDeliveries } from "./seenDeliveries.js";
 import { TokenStore } from "./tokenStore.js";
-import { CLOCK, CONFIG, FETCH, LOGGER } from "./tokens.js";
+import { CLOCK, CONFIG, FETCH, LOGGER, WEBHOOK_HANDLER } from "./tokens.js";
 import { WebhookController } from "./webhookController.js";
+import { WebhookQueue } from "./webhookQueue.js";
 
 export function buildContainer(config: Config, logger: Logger): DependencyContainer {
   // A child per app, so two apps (or two tests) never share a singleton. Nothing
@@ -18,9 +21,10 @@ export function buildContainer(config: Config, logger: Logger): DependencyContai
 
   c.registerInstance(CONFIG, config);
   c.registerInstance(LOGGER, logger);
-  // Tests replace these two, before anything resolves them.
+  // Tests replace these three, before anything resolves them.
   c.registerInstance(CLOCK, Date.now);
   c.registerInstance(FETCH, fetch);
+  c.register(WEBHOOK_HANDLER, { useToken: LinearEvents });
 
   // Existing classes keep their options objects, so a factory adapts them.
   // instanceCachingFactory makes each one a singleton of this container; the
@@ -54,6 +58,10 @@ export function buildContainer(config: Config, logger: Logger): DependencyContai
   // /oauth/install and /oauth/callback. WebhookController holds the webhook client.
   c.registerSingleton(OAuthController);
   c.registerSingleton(WebhookController);
+  // Singletons: one record of seen deliveries, and one queue so events stay in order.
+  c.registerSingleton(SeenDeliveries);
+  c.registerSingleton(WebhookQueue);
+  c.registerSingleton(LinearEvents);
 
   return c;
 }

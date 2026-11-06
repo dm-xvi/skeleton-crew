@@ -1,5 +1,5 @@
 import { createHmac } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { createServer, request, type Server } from "node:http";
 import { connect, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -10,7 +10,9 @@ import { afterAll, afterEach, beforeEach, describe, expect, test, vi } from "vit
 import { createApp } from "../src/app.js";
 import { buildContainer } from "../src/container.js";
 import { NotInstalledError, TokenStore } from "../src/tokenStore.js";
-import { CLOCK, FETCH } from "../src/tokens.js";
+import { CLOCK, FETCH, WEBHOOK_HANDLER } from "../src/tokens.js";
+import { LinearEvents } from "../src/linearEvents.js";
+import { WebhookQueue, type WebhookEvent } from "../src/webhookQueue.js";
 import { APP_USER_ID, fakeLinear, type FakeLinear } from "./fakeLinear.js";
 import { captureLogs } from "./logs.js";
 import { testConfig } from "./testConfig.js";
@@ -26,6 +28,10 @@ interface Fixture {
   body: string;
 }
 
+const fixtureNames = readdirSync(fixturesDir)
+  .filter((file) => file.endsWith(".json"))
+  .map((file) => file.slice(0, -".json".length));
+
 function fixture(name: string): Fixture {
   return JSON.parse(readFileSync(join(fixturesDir, `${name}.json`), "utf8"));
 }
@@ -40,6 +46,10 @@ let linear: FakeLinear;
 let tokenFile: string;
 let logLines: string[];
 let clock: number;
+// Every event the queue handed on, in order.
+let handled: WebhookEvent[];
+// Runs before the real handler for each event, so a test can make handling slow or fail.
+let beforeHandle: () => Promise<void>;
 
 beforeEach(async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "data-"));
@@ -57,6 +67,15 @@ beforeEach(async () => {
   c = buildContainer(config, logger);
   c.registerInstance(FETCH, linear.fetch);
   c.registerInstance(CLOCK, () => clock);
+  handled = [];
+  beforeHandle = async () => {};
+  c.registerInstance(WEBHOOK_HANDLER, {
+    handle: async (event) => {
+      handled.push(event);
+      await beforeHandle();
+      await c.resolve(LinearEvents).handle(event);
+    },
+  });
   server = createServer(createApp(c));
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -79,8 +98,11 @@ async function installed(): Promise<void> {
   expect((await callback({ code: "secret-code", state })).status).toBe(200);
 }
 
-function postWebhook(body: string, headers: Record<string, string>): Promise<Response> {
-  return fetch(`${base}/webhooks/linear`, { method: "POST", headers, body });
+// Also waits for the queue to handle what the delivery pushed.
+async function postWebhook(body: string, headers: Record<string, string>): Promise<Response> {
+  const res = await fetch(`${base}/webhooks/linear`, { method: "POST", headers, body });
+  await c.resolve(WebhookQueue).idle();
+  return res;
 }
 
 // Writes `head` on a bare socket and returns what came back within `ms`, for requests
@@ -283,9 +305,11 @@ describe("POST /webhooks/linear", () => {
     const revoked = fixture("oauth-app-revoked");
     deliveredAfter(revoked, 500);
     for (const contentType of ["application/json", "text/plain", "application/octet-stream"]) {
-      const res = await postWebhook(revoked.body, { ...revoked.headers, "content-type": contentType });
-      expect(res.status).toBe(200);
+      // A new delivery id each time, or the second and third are duplicates.
+      const headers = { ...revoked.headers, "content-type": contentType, "linear-delivery": contentType };
+      expect((await postWebhook(revoked.body, headers)).status).toBe(200);
     }
+    expect(handled).toHaveLength(3);
     expect(existsSync(tokenFile)).toBe(false);
   });
 
@@ -352,6 +376,144 @@ describe("POST /webhooks/linear", () => {
     const res = await fetch(`${base}/webhooks/linear`, { method: "POST" });
     expect(res.status).toBe(401);
     expect(await res.text()).toBe("");
+  });
+});
+
+// The "answered a webhook" lines, parsed.
+function answers(): { delivery?: string; event?: string; status: number; ackMs: number }[] {
+  return logLines.map((line) => JSON.parse(line)).filter((entry) => entry.msg === "answered a webhook");
+}
+
+describe("replaying the P0-3 fixtures", () => {
+  afterEach(() => vi.useRealTimers());
+
+  test.each(fixtureNames)("%s is acknowledged and queued once", async (name) => {
+    await installed();
+    const f = fixture(name);
+    deliveredAfter(f, 400);
+    expect((await postWebhook(f.body, f.headers)).status).toBe(200);
+    expect(handled).toHaveLength(1);
+    const [{ delivery, payload }] = handled as [WebhookEvent];
+    expect(delivery).toBe(f.headers["linear-delivery"]);
+    expect(payload.type).toBe(f.headers["linear-event"]);
+    expect(payload.action).toBe(JSON.parse(f.body).action);
+    await vi.waitFor(() =>
+      expect(answers()).toContainEqual(
+        expect.objectContaining({ delivery: f.headers["linear-delivery"], status: 200 }),
+      ),
+    );
+  });
+});
+
+describe("de-duplicating deliveries", () => {
+  afterEach(() => vi.useRealTimers());
+
+  test("a repeated delivery is acknowledged, logged as a duplicate and not queued", async () => {
+    const f = fixture("agent-session-prompted");
+    deliveredAfter(f, 400);
+    expect((await postWebhook(f.body, f.headers)).status).toBe(200);
+    expect((await postWebhook(f.body, f.headers)).status).toBe(200);
+    expect(handled).toHaveLength(1);
+    expect(logLines.join("")).toMatch(
+      new RegExp(`"delivery":"${f.headers["linear-delivery"]}".*"msg":"ignored a duplicate webhook"`),
+    );
+  });
+
+  test("two copies arriving together are queued once", async () => {
+    const f = fixture("agent-session-prompted");
+    deliveredAfter(f, 400);
+    const [a, b] = await Promise.all([postWebhook(f.body, f.headers), postWebhook(f.body, f.headers)]);
+    expect([a.status, b.status]).toEqual([200, 200]);
+    expect(handled).toHaveLength(1);
+  });
+
+  // The delivery id isn't signed, so a forgery must not use up a real one.
+  test("a rejected request does not mark its delivery id as seen", async () => {
+    const f = fixture("agent-session-prompted");
+    deliveredAfter(f, 400);
+    const forged = { ...f.headers, "linear-signature": "0".repeat(64) };
+    expect((await postWebhook(f.body, forged)).status).toBe(401);
+    expect((await postWebhook(f.body, f.headers)).status).toBe(200);
+    expect(handled).toHaveLength(1);
+  });
+
+  test("a delivery id is forgotten after a day", async () => {
+    const f = fixture("agent-session-prompted");
+    deliveredAfter(f, 400);
+    await postWebhook(f.body, f.headers);
+    clock += 23 * 60 * 60 * 1000;
+    await postWebhook(f.body, f.headers);
+    expect(handled).toHaveLength(1);
+    clock += 2 * 60 * 60 * 1000;
+    await postWebhook(f.body, f.headers);
+    expect(handled).toHaveLength(2);
+  });
+
+  test("a signed delivery without a Linear-Delivery id is still queued, with a warning", async () => {
+    const { "linear-delivery": _, ...headers } = fixture("agent-session-prompted").headers;
+    const { body } = fixture("agent-session-prompted");
+    deliveredAfter({ headers, body }, 400);
+    expect((await postWebhook(body, headers)).status).toBe(200);
+    expect(handled).toEqual([expect.objectContaining({ delivery: undefined })]);
+    expect(logLines.join("")).toMatch(/"level":40,.*"msg":"a signed webhook has no Linear-Delivery id"/);
+  });
+});
+
+describe("acknowledging fast", () => {
+  afterEach(() => vi.useRealTimers());
+
+  test("the ack is logged and stays under 5 s while handling is stuck", async () => {
+    let release!: () => void;
+    const stuck = new Promise<void>((resolve) => (release = resolve));
+    beforeHandle = () => stuck;
+    const first = fixture("agent-session-created-delegation");
+    const second = fixture("agent-session-prompted");
+    deliveredAfter(first, 400);
+    // Plain fetch: postWebhook would wait for the stuck queue.
+    const post = (f: Fixture): Promise<Response> =>
+      fetch(`${base}/webhooks/linear`, { method: "POST", headers: f.headers, body: f.body });
+    expect((await post(first)).status).toBe(200);
+    deliveredAfter(second, 400);
+    expect((await post(second)).status).toBe(200);
+    // The first is stuck in its handler; the second waits its turn.
+    expect(handled).toHaveLength(1);
+    await vi.waitFor(() => expect(answers()).toHaveLength(2));
+    for (const answer of answers()) {
+      expect(answer.status).toBe(200);
+      expect(answer.ackMs).toBeGreaterThanOrEqual(0);
+      expect(answer.ackMs).toBeLessThan(5000);
+    }
+    release();
+    await c.resolve(WebhookQueue).idle();
+    expect(handled.map((e) => e.delivery)).toEqual([
+      first.headers["linear-delivery"],
+      second.headers["linear-delivery"],
+    ]);
+  });
+
+  test("a rejected delivery's answer is logged too", async () => {
+    const f = fixture("agent-session-prompted");
+    deliveredAfter(f, 400);
+    await postWebhook(f.body, { ...f.headers, "linear-signature": "0".repeat(64) });
+    await vi.waitFor(() =>
+      expect(answers()).toEqual([
+        expect.objectContaining({ delivery: f.headers["linear-delivery"], event: "AgentSessionEvent", status: 401 }),
+      ]),
+    );
+  });
+
+  test("a failed handler is logged and the next event is still handled", async () => {
+    beforeHandle = async () => {
+      if (handled.length === 1) throw new Error("the first event broke");
+    };
+    const first = fixture("agent-session-created-delegation");
+    const second = fixture("agent-session-prompted");
+    deliveredAfter(first, 400);
+    expect((await postWebhook(first.body, first.headers)).status).toBe(200);
+    deliveredAfter(second, 400);
+    expect((await postWebhook(second.body, second.headers)).status).toBe(200);
+    expect(handled).toHaveLength(2);
+    expect(logLines.join("")).toMatch(/"the first event broke".*"msg":"handling a webhook failed"/);
   });
 });
 

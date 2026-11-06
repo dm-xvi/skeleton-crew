@@ -1,19 +1,19 @@
-// Linear's webhooks: verified over the raw body, then acted on. AGE-20 adds
-// de-duplication and the queue.
-import type { Request, Response } from "express";
+// Linear's webhooks: verified over the raw body, de-duplicated, acknowledged, and
+// only then handed to the queue.
+import type { Request, RequestHandler, Response } from "express";
 import {
   LINEAR_WEBHOOK_SIGNATURE_HEADER,
   LinearWebhookClient,
   type LinearWebhookPayload,
-  type OAuthAppWebhookPayload,
 } from "@linear/sdk/webhooks";
 import type { Logger } from "pino";
 import { inject, injectable } from "tsyringe";
 import type { Config } from "./config.js";
 import { empty } from "./http.js";
-// A value import, not `import type`: tsyringe resolves it by its runtime class.
-import { TokenStore } from "./tokenStore.js";
+// Value imports, not `import type`: tsyringe resolves them by their runtime class.
+import { SeenDeliveries } from "./seenDeliveries.js";
 import { CONFIG, LOGGER } from "./tokens.js";
+import { WebhookQueue } from "./webhookQueue.js";
 
 @injectable()
 export class WebhookController {
@@ -22,16 +22,32 @@ export class WebhookController {
   readonly #webhooks: LinearWebhookClient;
 
   constructor(
-    @inject(CONFIG) private readonly config: Config,
-    private readonly tokens: TokenStore,
+    @inject(CONFIG) config: Config,
+    private readonly seen: SeenDeliveries,
+    private readonly queue: WebhookQueue,
     @inject(LOGGER) private readonly logger: Logger,
   ) {
     this.#webhooks = new LinearWebhookClient(config.linear.webhookSecret);
   }
 
+  // Runs before the body is read, so the logged ack time includes reading it. Every
+  // answer is logged, the 401s and 413s too.
+  timed: RequestHandler = (req, res, next) => {
+    const start = performance.now();
+    res.on("finish", () => {
+      // performance.now(), not Date: tests fake Date to match the fixtures.
+      const ackMs = Math.round(performance.now() - start);
+      this.logger.info(
+        { delivery: req.headers["linear-delivery"], event: req.headers["linear-event"], status: res.statusCode, ackMs },
+        "answered a webhook",
+      );
+    });
+    next();
+  };
+
   // The route's rawBody() leaves req.body as the bytes Linear sent, which the HMAC
   // covers. A request with no body has zero bytes, and fails the check.
-  receive = async (req: Request, res: Response): Promise<void> => {
+  receive = (req: Request, res: Response): void => {
     // Nothing is decompressed, so a body labelled compressed is not what Linear signed.
     const encoding = (req.headers["content-encoding"] ?? "identity").toLowerCase();
     if (encoding !== "identity") {
@@ -49,16 +65,19 @@ export class WebhookController {
       this.#reject(req, res, reason);
       return;
     }
-    // The SDK types `type` as a plain string, so the union does not narrow on it.
-    if (payload.type === "OAuthApp" && payload.action === "revoked") {
-      if ((payload as OAuthAppWebhookPayload).oauthClientId === this.config.linear.clientId) {
-        await this.tokens.clear("Linear sent an OAuthApp revoked webhook");
-      } else {
-        this.logger.warn("ignoring an OAuthApp revoked webhook for another client");
-      }
+    // Only now: the signature doesn't cover this header, so a forged request must not
+    // get a real delivery id marked as seen.
+    const header = req.headers["linear-delivery"];
+    const delivery = typeof header === "string" && header !== "" ? header : undefined;
+    if (delivery === undefined) {
+      this.logger.warn({ type: payload.type, action: payload.action }, "a signed webhook has no Linear-Delivery id");
+    } else if (!this.seen.firstTime(delivery)) {
+      this.logger.info({ delivery, type: payload.type, action: payload.action }, "ignored a duplicate webhook");
+      empty(res, 200);
+      return;
     }
-    // Agent session events and notifications are acknowledged and dropped until AGE-20.
     empty(res, 200);
+    this.queue.push({ delivery, payload });
   };
 
   #reject(req: Request, res: Response, reason: string): void {
